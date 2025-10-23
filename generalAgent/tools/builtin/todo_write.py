@@ -10,61 +10,36 @@ from langchain_core.tools import tool
 def todo_write(
     todos: List[dict]
 ) -> dict:
-    """Create or update task list for tracking progress.
+    """Track multi-step tasks (3+ steps). Helps user see progress.
 
-    Use this tool to manage complex tasks with multiple steps. It helps track
-    progress and gives users visibility into what you're working on.
+    Use when: Complex multi-step tasks, user requests it, user provides list
+    Don't use: Single task, trivial tasks (<3 steps), conversational requests
 
-    When to use:
-    - Complex multi-step tasks (3+ steps)
-    - User explicitly requests todo list
-    - Tasks requiring careful planning
-    - After receiving new instructions
+    Task states: pending | in_progress | completed
+    Required fields: content (imperative), activeForm (present continuous), status
+    Optional fields: id (auto-generated if missing), priority (default: medium)
 
-    When NOT to use:
-    - Single, straightforward tasks
-    - Trivial tasks (< 3 steps)
-    - Purely conversational requests
-
-    Task management rules:
-    1. Mark tasks as 'in_progress' BEFORE starting work
-    2. Update to 'completed' IMMEDIATELY after finishing
-    3. Only ONE task should be 'in_progress' at a time
-    4. Don't batch completions - update after each task
-    5. Add new tasks if you discover additional work
+    Rules:
+    - Mark in_progress BEFORE starting work
+    - Mark completed IMMEDIATELY after finishing (don't batch)
+    - Only ONE in_progress at a time
+    - Don't mark completed if tests fail, errors occur, or incomplete
 
     Args:
-        todos: List of tasks, each containing:
-            - content (str): Task description
-            - status (str): "pending" | "in_progress" | "completed"
-            - priority (str): "high" | "medium" | "low"
-            - id (str): Unique task identifier
+        todos: List of {content, activeForm, status, id (optional), priority (optional)}
 
-    Returns:
-        Success status and context (main or subagent)
-
-    Example:
+    Examples:
         todo_write([
-            {
-                "id": "task-1",
-                "content": "Analyze codebase structure",
-                "status": "in_progress",
-                "priority": "high"
-            },
-            {
-                "id": "task-2",
-                "content": "Implement new feature",
-                "status": "pending",
-                "priority": "medium"
-            }
+            {"content": "Analyze code", "activeForm": "Analyzing code", "status": "in_progress"},
+            {"content": "Implement feature", "activeForm": "Implementing feature", "status": "pending"}
         ])
     """
     # Validate todos
     for todo in todos:
-        if "content" not in todo or "status" not in todo:
+        if "content" not in todo or "status" not in todo or "activeForm" not in todo:
             return {
                 "ok": False,
-                "error": "Each todo must have 'content' and 'status' fields"
+                "error": "Each todo must have 'content', 'status', and 'activeForm' fields"
             }
 
         if todo["status"] not in ["pending", "in_progress", "completed"]:

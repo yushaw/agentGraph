@@ -24,31 +24,29 @@ def set_app_graph(app_graph):
 
 @tool
 async def call_subagent(task: str, max_loops: int = 10) -> str:
-    """Execute a task in an isolated subagent context.
+    """Launch isolated subagent for complex multi-step tasks. Has access to all tools.
 
-    Use this tool for context isolation when:
-    - Complex multi-step tasks that need independent execution
-    - Uncertain searches requiring multiple rounds
-    - Tasks that would benefit from a fresh context
+    Use when: Multi-step research, uncertain searches, complex file analysis
+    Don't use: Reading known files, simple 1-step tasks, non-tool tasks
 
-    Do NOT use when:
-    - Reading specific files (use Read tool)
-    - Searching 2-3 known files (search directly)
-    - Simple single-step operations
+    IMPORTANT:
+    - Subagent is stateless (cannot send follow-up messages)
+    - Provide detailed self-contained task description
+    - Specify what info to return in final response
+    - Result not visible to user - you must summarize it
+    - When ok: true, task complete - don't retry
 
     Args:
-        task: Clear description of what the subagent should accomplish
-        max_loops: Maximum loops for subagent execution (default: 10)
+        task: Detailed task (what to do, what to return, research vs code)
+        max_loops: Max execution loops (default: 10)
 
     Returns:
-        JSON object with:
-        - ok (bool): Whether execution succeeded
-        - result (str): Subagent's final response
-        - context_id (str): Subagent's context identifier
-        - loops (int): Number of loops executed
+        JSON: {ok: bool, result: str, context_id: str, loops: int}
 
-    Example:
-        call_subagent("Search the codebase for authentication implementation and summarize how it works")
+    Examples:
+        call_subagent("Find authentication implementation, explain how login works, return function signatures with file paths")
+        call_subagent("Find all API endpoints. List HTTP method, path, handler, file location for each")
+        call_subagent("Locate database connection in config/, db/, models/. Return connection function and explain config")
     """
     try:
         # Get app graph from context

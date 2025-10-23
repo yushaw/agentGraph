@@ -49,3 +49,4 @@ class AppState(TypedDict, total=False):
     thread_id: Optional[str]     # Session identifier for persistence
     user_id: Optional[str]       # User identifier (for future personalization)
     workspace_path: Optional[str]  # Isolated workspace directory for this session
+    uploaded_files: List[Any]  # Processed uploaded files (for building reminder in planner)

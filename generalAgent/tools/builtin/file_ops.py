@@ -17,24 +17,17 @@ __all__ = ["read_file", "write_file", "list_workspace_files"]
 def read_file(
     path: Annotated[str, "File path relative to workspace root (e.g., 'skills/pdf/SKILL.md' or 'uploads/document.txt')"]
 ) -> str:
-    """Read a file from the workspace.
+    """Read file from workspace. Path relative to workspace root, NOT absolute.
 
-    This tool provides safe file reading with path restrictions:
-    - Can read from workspace directory (skills/, uploads/, outputs/, temp/)
-    - Cannot access files outside workspace
-    - Returns file contents as string
+    Can read: skills/, uploads/, outputs/, temp/
+    Returns: UTF-8 text content or error
+
+    NEVER use ".." or "/" prefix (security violation)
 
     Examples:
         read_file("skills/pdf/SKILL.md")
-        read_file("skills/pdf/forms.md")
         read_file("uploads/document.txt")
         read_file("outputs/result.csv")
-
-    Args:
-        path: File path relative to workspace root
-
-    Returns:
-        File contents as string, or error message
     """
     try:
         # Security: reject paths with traversal attempts
@@ -103,23 +96,16 @@ def write_file(
     path: Annotated[str, "File path relative to workspace (e.g., 'outputs/result.txt', 'temp/data.json')"],
     content: Annotated[str, "File content to write"]
 ) -> str:
-    """Write content to a file in the workspace.
+    """Write/overwrite file in workspace. Creates parent dirs automatically.
 
-    This tool provides safe file writing with restrictions:
-    - Can only write to workspace/uploads/, workspace/outputs/, workspace/temp/
-    - Cannot write to skills/ (read-only)
-    - Creates parent directories automatically
+    Can ONLY write to: uploads/, outputs/, temp/ (NOT skills/)
+    NEVER use ".." or "/" prefix
+
+    Use outputs/ for permanent results, temp/ for temporary files
 
     Examples:
-        write_file("outputs/analysis.txt", "Analysis results...")
-        write_file("temp/data.json", '{"key": "value"}')
-
-    Args:
-        path: File path relative to workspace
-        content: Content to write
-
-    Returns:
-        Success message or error
+        write_file("outputs/analysis.txt", "Analysis: 42 issues")
+        write_file("temp/data.json", '{"users": 100}')
     """
     try:
         # Security: reject paths with traversal attempts
@@ -174,18 +160,14 @@ def write_file(
 def list_workspace_files(
     directory: Annotated[str, "Directory to list (e.g., 'uploads', 'outputs', 'skills/pdf')"] = "."
 ) -> str:
-    """List files in a workspace directory.
+    """List files/directories in workspace. Returns [DIR]/[FILE] indicators.
+
+    Use "." for workspace root. NEVER use ".." or "/" prefix
 
     Examples:
+        list_workspace_files(".")
         list_workspace_files("uploads")
         list_workspace_files("skills/pdf")
-        list_workspace_files(".")  # List all
-
-    Args:
-        directory: Directory path relative to workspace
-
-    Returns:
-        Formatted list of files and directories
     """
     try:
         # Security: reject paths with traversal attempts

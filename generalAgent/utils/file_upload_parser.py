@@ -43,8 +43,8 @@ def parse_file_mentions(text: str) -> Tuple[List[str], str]:
             file_mentions.append(match)
             seen.add(match)
 
-    # Clean text: remove #filename patterns
-    cleaned_text = re.sub(pattern, '', text)
+    # Clean text: replace #filename with just filename (keep the name)
+    cleaned_text = re.sub(pattern, r'\1', text)
 
     # Clean up extra whitespace
     cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()

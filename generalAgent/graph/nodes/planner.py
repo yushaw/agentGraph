@@ -199,24 +199,20 @@ def build_planner_node(
             incomplete = in_progress + pending
 
             if incomplete:
-                # Build detailed reminder
+                # Build concise reminder: current + next only
                 todo_lines = []
                 if in_progress:
-                    todo_lines.append(f"当前进行中: {in_progress[0].get('content')}")
+                    todo_lines.append(f"当前: {in_progress[0].get('content')}")
                 if pending:
-                    pending_list = [t.get('content', '') for t in pending[:3]]  # Show first 3
-                    todo_lines.append(f"待办任务 ({len(pending)} 个): {', '.join(pending_list)}")
-                if completed:
-                    todo_lines.append(f"已完成: {len(completed)} 个")
+                    # Show only next task
+                    todo_lines.append(f"下一个: {pending[0].get('content')}")
+                    if len(pending) > 1:
+                        todo_lines.append(f"(还有 {len(pending) - 1} 个待办)")
 
                 # Strong reminder to prevent early stopping
                 todo_reminder = f"""<system_reminder>
-⚠️ 任务进度追踪: {', '.join(todo_lines)}
-
-你还有 {len(incomplete)} 个未完成任务！
-- 请使用 todo_read 工具检查详细状态
-- 完成所有任务后再停止（不调用工具）
-- 不要过早停止！
+⚠️ 任务追踪: {' | '.join(todo_lines)}
+使用 todo_read 查看所有任务。完成所有任务后再停止！
 </system_reminder>"""
                 LOGGER.info(f"  - Todo reminder: {len(incomplete)} incomplete, {len(completed)} completed")
             elif completed:
@@ -242,8 +238,15 @@ def build_planner_node(
                 base_prompt = f"{base_prompt}\n\n{skills_catalog}"
                 LOGGER.info(f"  - Skills catalog added ({len(skill_registry.list_meta())} skills)")
 
-            # Add dynamic reminders
-            reminders = [r for r in [dynamic_reminder, todo_reminder] if r]
+            # Build file upload reminder if there are uploaded files
+            from generalAgent.utils.file_processor import build_file_upload_reminder
+            uploaded_files = state.get("uploaded_files", [])
+            file_upload_reminder = ""
+            if uploaded_files:
+                file_upload_reminder = build_file_upload_reminder(uploaded_files)
+
+            # Add dynamic reminders (including file upload reminder)
+            reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder] if r]
             if reminders:
                 base_prompt = f"{base_prompt}\n\n{chr(10).join(reminders)}"
                 LOGGER.info(f"  - Reminders added: {len(reminders)} reminder(s)")

@@ -16,13 +16,13 @@ LOGGER = logging.getLogger(__name__)
 @tool
 def run_bash_command(
     command: Annotated[str, "Bash command to execute (e.g., 'ls -la', 'cat file.txt')"],
-    timeout: Annotated[int, "Timeout in seconds"] = 10
+    timeout: Annotated[int, "Timeout in seconds"] = 30
 ) -> str:
     """Execute a bash command in the workspace directory.
 
     WARNING: This tool is powerful and should be used carefully.
     - Commands run in workspace directory
-    - Limited to 10s timeout by default
+    - Limited to 30s timeout by default
     - No network access recommended
 
     Examples:

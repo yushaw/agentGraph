@@ -373,13 +373,10 @@ async def async_main():
                 # Multimodal message (with images or structured content)
                 messages.append(HumanMessage(content=message_content))
 
-            # Add system_reminder for uploaded files
-            if processed_files:
-                file_reminder = build_file_upload_reminder(processed_files)
-                if file_reminder:
-                    messages.append(SystemMessage(content=file_reminder))
-
             state["messages"] = messages
+
+            # Store processed files in state (planner will build reminder)
+            state["uploaded_files"] = processed_files
             start_index = len(messages)
 
             try:

@@ -37,7 +37,12 @@ core:
     category: "file"
     tags: ["file", "list"]
     description: "List files in workspace directory"
-  
+
+  edit_file:
+    category: "file"
+    tags: ["file", "edit", "write"]
+    description: "Edit files with precise string replacement (safer than write_file)"
+
   run_skill_script:
     enabled: false
     always_available: false
