@@ -68,15 +68,13 @@ def log_state_transition(logger: logging.Logger, from_node: str, to_node: str, s
     """
     logger.info("=" * 80)
     logger.info(f"Node transition: {from_node} → {to_node}")
-    logger.info(f"  Execution phase: {state.get('execution_phase')}")
-    logger.info(f"  Task complexity: {state.get('task_complexity')}")
-    logger.info(f"  Step index: {state.get('step_idx')}/{len(state.get('plan', {}).get('steps', []))}")
-    logger.info(f"  Step calls: {state.get('step_calls')}/{state.get('max_step_calls')}")
+    logger.info(f"  Context: {state.get('context_id')}")
     logger.info(f"  Loops: {state.get('loops')}/{state.get('max_loops')}")
     logger.info(f"  Message count: {len(state.get('messages', []))}")
     logger.info(f"  Active skill: {state.get('active_skill')}")
     logger.info(f"  Mentioned agents: {state.get('mentioned_agents', [])}")
     logger.info(f"  Allowed tools: {state.get('allowed_tools', [])}")
+    logger.info(f"  Todo count: {len(state.get('todos', []))}")
     logger.info("=" * 80)
 
 
@@ -258,15 +256,14 @@ def log_node_entry(logger: logging.Logger, node_name: str, state: Dict[str, Any]
     logger.info(f"# ENTERING NODE: {node_name}")
     logger.info(f"{'#'*80}")
     logger.info(f"State snapshot:")
-    logger.info(f"  - execution_phase: {state.get('execution_phase')}")
-    logger.info(f"  - task_complexity: {state.get('task_complexity')}")
+    logger.info(f"  - context_id: {state.get('context_id')}")
     logger.info(f"  - loops: {state.get('loops')}/{state.get('max_loops')}")
-    logger.info(f"  - step_idx: {state.get('step_idx')}")
-    logger.info(f"  - step_calls: {state.get('step_calls')}/{state.get('max_step_calls')}")
     logger.info(f"  - messages: {len(state.get('messages', []))}")
+    logger.info(f"  - todos: {len(state.get('todos', []))} tasks")
     logger.info(f"  - active_skill: {state.get('active_skill')}")
     logger.info(f"  - mentioned_agents: {state.get('mentioned_agents', [])}")
-    logger.info(f"  - thread_id: {state.get('thread_id', 'N/A')[:8]}...")
+    thread_id = state.get('thread_id') or 'N/A'
+    logger.info(f"  - thread_id: {thread_id[:8]}...")
 
 
 def log_node_exit(logger: logging.Logger, node_name: str, updates: Dict[str, Any]) -> None:

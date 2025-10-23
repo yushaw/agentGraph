@@ -1,24 +1,16 @@
-"""Tool collections and registries."""
+"""Tool collections and registries.
 
-from .base import calc, format_json, now, start_decomposition
-from .business import ask_vision, draft_outline, extract_links, generate_pptx, get_weather, http_fetch
-from .external_agent import call_external_agent
+Note: Most tools are now auto-discovered via scanner from agentgraph/tools/builtin/.
+Only registry and utilities are exported here.
+"""
+
 from .registry import ToolMeta, ToolRegistry
+from .builtin.call_subagent import set_app_graph
 from .system import build_skill_tools
 
 __all__ = [
-    "calc",
-    "format_json",
-    "now",
-    "start_decomposition",
-    "ask_vision",
-    "draft_outline",
-    "extract_links",
-    "generate_pptx",
-    "get_weather",
-    "http_fetch",
-    "call_external_agent",
     "ToolRegistry",
     "ToolMeta",
     "build_skill_tools",
+    "set_app_graph",
 ]

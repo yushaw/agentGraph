@@ -252,10 +252,7 @@ async def async_main():
                                 continue
                             if tool_id:
                                 printed_tool_ids.add(tool_id)
-                            # Only print interesting tool results
-                            tool_name = getattr(msg, "name", "")
-                            if tool_name not in {"list_skills", "select_skill"}:
-                                print(f"[tool] {text}")
+                            print(f"[tool] {text}")
 
                     last_printed_msg_count = len(current_messages)
 

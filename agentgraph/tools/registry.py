@@ -24,6 +24,7 @@ class ToolRegistry:
     def __init__(self, tools: Optional[Iterable[BaseTool]] = None, meta: Optional[Iterable[ToolMeta]] = None) -> None:
         self._tools: Dict[str, BaseTool] = {}
         self._meta: Dict[str, ToolMeta] = {}
+        self._discovered: Dict[str, BaseTool] = {}  # All discovered tools (for on-demand loading)
         if tools:
             for tool in tools:
                 self.register_tool(tool)
@@ -60,3 +61,47 @@ class ToolRegistry:
         if not allowlist:
             return []
         return [self._tools[name] for name in allowlist if name in self._tools]
+
+    def register_discovered(self, tool: BaseTool) -> None:
+        """Register a discovered tool (may not be enabled yet).
+
+        This is used to keep track of all scanned tools for on-demand loading.
+        """
+        self._discovered[tool.name] = tool
+
+    def is_discovered(self, tool_name: str) -> bool:
+        """Check if a tool was discovered during scan.
+
+        Args:
+            tool_name: Name of the tool
+
+        Returns:
+            True if tool is in discovered pool (registered or discoverable)
+        """
+        return tool_name in self._tools or tool_name in self._discovered
+
+    def load_on_demand(self, tool_name: str) -> BaseTool:
+        """Load a tool on-demand from discovered tools.
+
+        This is used when a user @mentions a tool that wasn't enabled at startup.
+
+        Args:
+            tool_name: Name of the tool to load
+
+        Returns:
+            Tool instance
+
+        Raises:
+            KeyError: If tool was not discovered during scan
+        """
+        if tool_name in self._tools:
+            # Already registered, return it
+            return self._tools[tool_name]
+
+        if tool_name not in self._discovered:
+            raise KeyError(f"Tool not found in discovered tools: {tool_name}")
+
+        # Load from discovered pool
+        tool = self._discovered[tool_name]
+        self.register_tool(tool)
+        return tool

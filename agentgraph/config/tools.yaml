@@ -1,0 +1,65 @@
+# Tools Configuration
+# Controls which tools are available to the agent
+
+# Core tools - Always enabled and available
+core:
+  now:
+    category: "meta"
+    tags: ["meta", "time"]
+    description: "Get current UTC time"
+
+  todo_write:
+    category: "meta"
+    tags: ["meta", "task"]
+    description: "Create/update TODO list"
+
+  todo_read:
+    category: "meta"
+    tags: ["meta", "task"]
+    description: "Read TODO status"
+
+  call_subagent:
+    category: "agent"
+    tags: ["agent", "delegation"]
+    description: "Delegate tasks to subagent"
+
+# Optional tools - Can be enabled/disabled
+optional:
+
+  http_fetch:
+    enabled: true
+    always_available: false
+    category: "network"
+    tags: ["network", "read"]
+    description: "HTTP fetching (stub)"
+
+  extract_links:
+    enabled: false
+    always_available: false
+    category: "read"
+    tags: ["read", "parse"]
+    description: "Link extraction (stub)"
+
+  ask_vision:
+    enabled: false
+    always_available: false
+    category: "read"
+    tags: ["vision", "read"]
+    description: "Vision perception (stub)"
+
+  call_external_agent:
+    enabled: false
+    always_available: false
+    category: "network"
+    tags: ["network", "agent"]
+    description: "Call external agents"
+
+# Tool directories
+directories:
+  builtin: "agentgraph/tools/builtin"
+  custom: "agentgraph/tools/custom"    # User-defined tools (optional)
+
+# Hot reload settings
+hot_reload:
+  enabled: false        # Enable hot reload of tools (experimental)
+  watch_interval: 5     # Check for changes every N seconds

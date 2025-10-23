@@ -1,4 +1,4 @@
-"""Factory for assembling the LangGraph state machine - Simplified MVP architecture."""
+"""Factory for assembling the LangGraph state machine - Agent Loop architecture."""
 
 from __future__ import annotations
 
@@ -9,17 +9,12 @@ from langgraph.prebuilt import ToolNode
 
 from agentgraph.agents import ModelResolver
 from agentgraph.graph.nodes import (
-    build_analyze_node,
     build_finalize_node,
     build_planner_node,
-    build_post_node,
-    build_step_executor_node,
 )
 from agentgraph.graph.routing import (
-    post_route,
-    analyze_route,
+    agent_route,
     tools_route,
-    step_route,
 )
 from agentgraph.graph.state import AppState
 from agentgraph.models import ModelRegistry
@@ -32,55 +27,36 @@ def build_state_graph(
     model_resolver: ModelResolver,
     tool_registry: ToolRegistry,
     persistent_global_tools: List,
-    subagent_catalog: Dict[str, List[str]],
     skill_registry,
     checkpointer=None,
 ):
-    """Compose the simplified agent graph for MVP.
+    """Compose the agent graph with Agent Loop architecture (Claude Code style).
 
-    Simplified Architecture (No Guard/Verify):
+    Simplified Architecture:
 
-    Phase 1 (Simple Tasks):
-        START → plan → tools → post → analyze
-                 ↑____________↓         ↓
-                  (continue)      (simple)
-                                      ↓
-                                  finalize → END
+        START → agent ⇄ tools → agent ⇄ ... → finalize → END
+                  ↑_____________↓
 
-    Phase 2 (Complex Tasks with Plan):
-        START → plan → tools → post → step_executor
-                                           ↑_____↓
-                                           (loop)
-                                              ↓
-                                          finalize → END
+    Agent Loop design (no Plan-and-Execute):
+    - Single agent node that decides its own flow
+    - LLM chooses to call tools or finish
+    - TodoWrite tool for progress tracking (observer, not commander)
+    - No complexity analysis, no multi-phase execution
+    - Agent operates continuously until task complete or loop limit
 
-    Key simplifications for MVP:
-    - Removed guard node (no approval flow)
-    - Removed verify node (trust LLM's judgment)
-    - Removed deliverable_checkers (not needed for MVP)
-    - Step executor decides autonomously when to continue/finish
-    - Focus on core functionality: tool calling, task decomposition, multi-turn context
+    Key changes from Plan-and-Execute:
+    - Removed: post, analyze, step_executor nodes
+    - Removed: plan/step_idx/step_calls state fields
+    - Simplified routing: agent decides everything via tool_calls
+    - Agent can use TodoWrite to track progress dynamically
     """
 
     # ========== Build nodes ==========
-    planner_node = build_planner_node(
+    agent_node = build_planner_node(
         model_registry=model_registry,
         model_resolver=model_resolver,
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
-        skill_registry=skill_registry,
-    )
-
-    post_node = build_post_node()
-
-    analyze_node = build_analyze_node()
-
-    step_executor_node = build_step_executor_node(
-        model_registry=model_registry,
-        model_resolver=model_resolver,
-        tool_registry=tool_registry,
-        persistent_global_tools=persistent_global_tools,
-        subagent_catalog=subagent_catalog,
         skill_registry=skill_registry,
     )
 
@@ -92,64 +68,35 @@ def build_state_graph(
     # ========== Build graph ==========
     graph = StateGraph(AppState)
 
-    # Add all nodes
-    graph.add_node("plan", planner_node)
+    # Add nodes
+    graph.add_node("agent", agent_node)
     graph.add_node("tools", ToolNode(tool_registry.list_tools()))
-    graph.add_node("post", post_node)
-    graph.add_node("analyze", analyze_node)
-    graph.add_node("step_executor", step_executor_node)
     graph.add_node("finalize", finalize_node)
 
-    # ========== Phase 1: Initial Analysis ==========
+    # ========== Agent Loop ==========
     # Entry point
-    graph.add_edge(START, "plan")
+    graph.add_edge(START, "agent")
 
-    # Direct tool execution (no guard)
-    graph.add_edge("plan", "tools")
+    # Agent decides: call tools or finish
+    graph.add_conditional_edges(
+        "agent",
+        agent_route,
+        {
+            "tools": "tools",      # LLM wants to call tools
+            "finalize": "finalize",  # LLM decided to finish
+        }
+    )
 
-    # Tool execution routing based on phase
+    # Tools always return to agent
     graph.add_conditional_edges(
         "tools",
         tools_route,
         {
-            "post": "post",            # Phase 1: post-processing
-            "step_executor": "step_executor",  # Phase 2: continue plan execution
+            "agent": "agent",  # Continue loop
         }
     )
 
-    # Routing based on whether plan was created
-    graph.add_conditional_edges(
-        "post",
-        post_route,
-        {
-            "analyze": "analyze",        # No plan yet, analyze task complexity
-            "step_executor": "step_executor",  # Plan created, start executing
-        }
-    )
-
-    # Analyze decides next action
-    graph.add_conditional_edges(
-        "analyze",
-        analyze_route,
-        {
-            "continue": "plan",    # LLM has more tools to call, loop back
-            "simple": "finalize",  # Task completed
-            "end": "finalize",     # Error case
-        }
-    )
-
-    # ========== Phase 2: Plan Execution Loop ==========
-    # Step executor decides autonomously whether to continue or finish
-    graph.add_conditional_edges(
-        "step_executor",
-        step_route,
-        {
-            "tools": "tools",      # Execute tools for current step
-            "finalize": "finalize",  # All steps done
-        }
-    )
-
-    # ========== Exit ==========
+    # Exit
     graph.add_edge("finalize", END)
 
     # ========== Compile ==========

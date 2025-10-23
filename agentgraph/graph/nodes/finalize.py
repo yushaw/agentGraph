@@ -42,11 +42,6 @@ def build_finalize_node(
             LOGGER.info(f"Last message is not a tool result (type={type(history[-1]).__name__}), skipping finalize")
             return {}
 
-        # Skip finalize for meta operations (skill selection)
-        if history[-1].name in {"list_skills", "select_skill"}:
-            LOGGER.info(f"Last tool was meta operation ({history[-1].name}), skipping finalize")
-            return {}
-
         LOGGER.info(f"Generating final response (last tool: {history[-1].name})...")
 
         # Clean and safely truncate message history (keep last 20 messages - token optimization)

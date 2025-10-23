@@ -9,13 +9,14 @@ from langgraph.graph import add_messages
 
 
 class AppState(TypedDict, total=False):
-    """Conversation state tracked across graph execution - Simplified MVP version.
+    """Conversation state tracked across graph execution - Agent Loop architecture.
 
-    This state supports a simplified two-phase architecture:
-    - Phase 1 (initial): plan → tools → post → analyze
-    - Phase 2 (loop): step_executor → tools → (continue or finalize)
+    This state supports a flexible agent loop architecture (Claude Code style):
+    - Single agent loop that decides its own execution flow
+    - TodoWrite tool for progress tracking (observer, not commander)
+    - Subagents run in independent State instances for context isolation
 
-    Removed: guard, verify, awaiting_approval, evidence (not needed for MVP)
+    Architecture change: Removed Plan-and-Execute pattern in favor of flexible LLM-driven flow.
     """
 
     # ========== Messages and media ==========
@@ -30,17 +31,14 @@ class AppState(TypedDict, total=False):
     mentioned_agents: List[str]  # List of @mentioned agent/skill/tool names
     persistent_tools: List[str]  # Tools that should remain active for the session
 
-    # ========== Execution plan ==========
-    plan: Optional[Dict[str, Any]]  # Structured plan created by LLM via create_plan tool
-    step_idx: int                   # Current step index in plan
-    step_calls: int                 # Tool calls within current step
-    max_step_calls: int             # Budget per step
+    # ========== Task tracking ==========
+    todos: List[dict]  # Task list managed by TodoWrite tool (for progress tracking)
+
+    # ========== Context isolation ==========
+    context_id: str                # "main" or "subagent-{uuid}"
+    parent_context: Optional[str]  # Parent context ID (only for subagents)
 
     # ========== Execution control ==========
-    execution_phase: Literal["initial", "loop"]  # Which phase we're in
-    task_complexity: Literal["simple", "complex", "continue", "unknown"]  # Determined by analyze node
-    complexity_reason: Optional[str]  # Why the task was classified as complex/simple/continue
-
     loops: int          # Global loop counter
     max_loops: int      # Hard limit on total loops
 

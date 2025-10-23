@@ -16,18 +16,11 @@ from agentgraph.telemetry import configure_tracing
 from agentgraph.tools import (
     ToolMeta,
     ToolRegistry,
-    ask_vision,
     build_skill_tools,
-    calc,
-    call_external_agent,
-    draft_outline,
-    extract_links,
-    format_json,
-    generate_pptx,
-    get_weather,
-    http_fetch,
-    now,
+    set_app_graph,
 )
+from agentgraph.tools.scanner import scan_multiple_directories
+from agentgraph.tools.config_loader import load_tool_config
 from .model_resolver import build_model_resolver, resolve_model_configs
 
 LOGGER = logging.getLogger(__name__)
@@ -39,51 +32,70 @@ def _create_skill_registry(skills_root: Path) -> SkillRegistry:
 
 
 def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, List]:
+    """Create tool registry using scanner and configuration.
+
+    NEW: Uses automatic scanning and tools.yaml configuration instead of
+    hardcoded tool imports. This enables hot-reload and plugin support.
+    """
     registry = ToolRegistry()
 
-    for tool in [
-        now,
-        calc,
-        format_json,
-        draft_outline,
-        generate_pptx,
-        http_fetch,
-        extract_links,
-        ask_vision,
-        get_weather,
-        call_external_agent,
-    ]:
-        registry.register_tool(tool)
+    # Load configuration
+    tool_config = load_tool_config()
+    LOGGER.info("Loading tools from configuration...")
 
+    # Scan and load tools from directories
+    scan_dirs = tool_config.get_scan_directories()
+    discovered_tools = scan_multiple_directories(scan_dirs)
+    LOGGER.info(f"  - Discovered {len(discovered_tools)} tools from scan")
+
+    # Get enabled tools from config
+    enabled_tools = tool_config.get_all_enabled_tools()
+    LOGGER.info(f"  - Enabled tools from config: {sorted(enabled_tools)}")
+
+    # Register ALL discovered tools for on-demand loading
+    for tool_name, tool_instance in discovered_tools.items():
+        registry.register_discovered(tool_instance)
+
+    # Register enabled tools as immediately available
+    registered_count = 0
+    for tool_name, tool_instance in discovered_tools.items():
+        if tool_name in enabled_tools:
+            registry.register_tool(tool_instance)
+            registered_count += 1
+            LOGGER.info(f"    ✓ Enabled: {tool_name}")
+        else:
+            LOGGER.debug(f"    ○ Discovered (not enabled): {tool_name}")
+
+    LOGGER.info(f"  - Registered {registered_count} tools from scan")
+
+    # Register skill tools
     skill_tools = build_skill_tools(skill_registry)
     for skill_tool in skill_tools:
         registry.register_tool(skill_tool)
+    LOGGER.info(f"  - Registered {len(skill_tools)} skill tools")
 
-    metadata = [
-        ToolMeta("now", "meta", ["meta"], always_available=True),
-        ToolMeta("format_json", "meta", ["meta"], always_available=True),
-        ToolMeta("list_skills", "meta", ["meta"], always_available=True),
-        ToolMeta("select_skill", "meta", ["meta"], always_available=True),
-        ToolMeta("create_plan", "meta", ["plan"], always_available=True),
-        ToolMeta("draft_outline", "compute", ["read"], always_available=False),
-        ToolMeta("generate_pptx", "write", ["file", "write"]),
-        ToolMeta("http_fetch", "network", ["network", "read"]),
-        ToolMeta("extract_links", "read", ["read"]),
-        ToolMeta("ask_vision", "read", ["vision"]),
-        ToolMeta("get_weather", "network", ["network", "read"]),
-        ToolMeta("call_external_agent", "network", ["agent", "network"], always_available=False),
-    ]
-    for item in metadata:
-        registry.register_meta(item)
+    # Register metadata from configuration (not hardcoded)
+    all_metadata = tool_config.get_all_tool_metadata()
+    LOGGER.info(f"Loading metadata for {len(all_metadata)} tools from config...")
+    for meta in all_metadata:
+        try:
+            registry.register_meta(meta)
+            LOGGER.debug(f"  ✓ Registered metadata for: {meta.name} (always_available={meta.always_available})")
+        except KeyError:
+            # Tool not registered, skip metadata
+            LOGGER.warning(f"  ✗ Metadata found but tool not registered: {meta.name}")
 
-    persistent = [
-        registry.get_tool("now"),
-        registry.get_tool("calc"),
-        registry.get_tool("format_json"),
-        registry.get_tool("list_skills"),
-        registry.get_tool("select_skill"),
-        registry.get_tool("create_plan"),
-    ]
+    # Build persistent (always available) tools list from config
+    persistent = []
+    for tool_name in enabled_tools:
+        if tool_config.is_always_available(tool_name):
+            try:
+                persistent.append(registry.get_tool(tool_name))
+            except KeyError:
+                LOGGER.warning(f"Tool '{tool_name}' configured but not found")
+
+    LOGGER.info(f"  - Persistent tools: {[t.name for t in persistent]}")
+
     return registry, persistent
 
 
@@ -107,15 +119,7 @@ def build_application(
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)
 
-    subagent_catalog = {
-        "research": ["ask_vision", "http_fetch", "extract_links", "get_weather", "call_external_agent", "now", "calc", "format_json"],
-        "writer": ["draft_outline", "generate_pptx", "now", "calc", "format_json"],
-        "weather": ["get_weather", "now", "calc", "format_json"],
-        "coordinator": ["call_external_agent", "now", "calc", "format_json"],  # 专门用于协调多个 agent
-    }
-
     max_loops = settings.governance.max_loops
-    max_step_calls = settings.governance.max_step_calls
 
     # Build SQLite checkpointer for session persistence (always enabled by default)
     # The checkpointer is a wrapper that implements async context manager
@@ -130,10 +134,13 @@ def build_application(
         model_resolver=resolver,
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
-        subagent_catalog=subagent_catalog,
         skill_registry=skill_registry,
         checkpointer=checkpointer,
     )
+
+    # Set app graph for call_subagent tool
+    set_app_graph(app)
+    LOGGER.info("Application graph registered for subagent execution")
 
     def initial_state() -> dict:
         return {
@@ -144,15 +151,11 @@ def build_application(
             "mentioned_agents": [],
             "persistent_tools": [],
             "model_pref": None,
-            "plan": None,
-            "step_idx": 0,
-            "step_calls": 0,
-            "max_step_calls": max_step_calls,
+            "todos": [],
+            "context_id": "main",
+            "parent_context": None,
             "loops": 0,
             "max_loops": max_loops,
-            "execution_phase": "initial",
-            "task_complexity": "unknown",
-            "complexity_reason": None,
             "thread_id": None,
             "user_id": None,
         }

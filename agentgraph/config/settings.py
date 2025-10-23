@@ -86,8 +86,7 @@ class GovernanceSettings(BaseModel):
     """Runtime governance toggles."""
 
     auto_approve_writes: bool = Field(default=False, alias="AUTO_APPROVE_WRITES")
-    max_loops: int = Field(default=10, ge=1, le=50)
-    max_step_calls: int = Field(default=3, ge=1, le=10)
+    max_loops: int = Field(default=100, ge=1, le=500)
 
 
 class ObservabilitySettings(BaseModel):

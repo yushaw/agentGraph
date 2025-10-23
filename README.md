@@ -64,7 +64,7 @@ allowed_tools: [draft_outline, generate_pptx]
 
 Example: `skills/weather/SKILL.yaml` exposes the `get_weather` tool, which calls the Open-Meteo geocoding + forecast APIs to return real-time conditions for a requested city.
 
-Use `SkillRegistry` to reload manifests at runtime. `list_skills` and `select_skill` tools are generated dynamically and always available to the planner.
+Use `SkillRegistry` to reload manifests at runtime. Skills are accessed by reading `SKILL.md` files directly using the Read tool.
 
 ## Tools
 
