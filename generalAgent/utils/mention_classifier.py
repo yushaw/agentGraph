@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from agentgraph.tools import ToolRegistry
-from agentgraph.skills import SkillRegistry
+from generalAgent.tools import ToolRegistry
+from generalAgent.skills import SkillRegistry
 
 
 @dataclass

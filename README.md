@@ -1,6 +1,8 @@
-# AgentGraph Universal Agent Skeleton
+# GeneralAgent - Flexible Agent System
 
-This repository contains an opinionated LangGraph-based architecture for building extensible agents. The goal is to make it easy to manage models, skills, tools, governance policies, and complex task execution flows while remaining provider-agnostic.
+An opinionated LangGraph-based architecture for building various types of agents. This repository provides the **general-purpose agent loop** implementation. Future additions will include workflow-based agents and other specialized agent types.
+
+**Current Implementation**: General-purpose agent with dynamic tool calling, skill loading, and multi-model routing.
 
 ## Features
 
@@ -14,7 +16,7 @@ This repository contains an opinionated LangGraph-based architecture for buildin
 ## Directory Layout
 
 ```
-agentgraph/
+generalAgent/
 ├── agents/           # Agent factories and model resolver protocol
 ├── config/           # Pydantic settings objects (.env-aware)
 ├── graph/            # State, prompts, plan schema, routing, node factories
@@ -30,7 +32,7 @@ agentgraph/
 
 ## Configuration
 
-All runtime configuration is sourced from `.env` via `agentgraph.config.settings.Settings`. Key variables:
+All runtime configuration is sourced from `.env` via `generalAgent.config.settings.Settings`. Key variables:
 
 ```
 MODEL_BASE, MODEL_REASON, MODEL_VISION, MODEL_CODE, MODEL_CHAT
@@ -148,14 +150,14 @@ Optional tools (can be enabled via tools.yaml):
 - `run_bash_command` - Execute bash commands (disabled by default)
 
 **Tool Development**:
-- Tools are automatically discovered by scanning `agentgraph/tools/builtin/`
+- Tools are automatically discovered by scanning `generalAgent/tools/builtin/`
 - Multiple tools can be defined in a single file using `__all__` export
-- Configuration is managed via `agentgraph/config/tools.yaml`
-- See `agentgraph/tools/builtin/file_ops.py` for multi-tool file example
+- Configuration is managed via `generalAgent/config/tools.yaml`
+- See `generalAgent/tools/builtin/file_ops.py` for multi-tool file example
 
 ## LangGraph Flow
 
-`agentgraph.graph.builder.build_state_graph` assembles the full flow with these nodes:
+`generalAgent.graph.builder.build_state_graph` assembles the full flow with these nodes:
 
 1. **plan** – governed planner (scoped tools, Skill discovery).
 2. **guard** – policy enforcement & HITL gate.
@@ -165,7 +167,7 @@ Optional tools (can be enabled via tools.yaml):
 6. **delegate** – runs scoped subagents per step.
 7. **after** – verifies deliverables, advances plan, enforces budgets.
 
-Routing helpers in `agentgraph.graph.routing` decide whether to decompose and when to finish loops.
+Routing helpers in `generalAgent.graph.routing` decide whether to decompose and when to finish loops.
 
 ## Extending the System
 

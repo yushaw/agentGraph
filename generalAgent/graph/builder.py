@@ -7,18 +7,18 @@ from typing import Dict, List
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 
-from agentgraph.agents import ModelResolver
-from agentgraph.graph.nodes import (
+from generalAgent.agents import ModelResolver
+from generalAgent.graph.nodes import (
     build_finalize_node,
     build_planner_node,
 )
-from agentgraph.graph.routing import (
+from generalAgent.graph.routing import (
     agent_route,
     tools_route,
 )
-from agentgraph.graph.state import AppState
-from agentgraph.models import ModelRegistry
-from agentgraph.tools import ToolRegistry
+from generalAgent.graph.state import AppState
+from generalAgent.models import ModelRegistry
+from generalAgent.tools import ToolRegistry
 
 
 def build_state_graph(

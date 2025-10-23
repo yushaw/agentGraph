@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from agentgraph.tools.config_loader import ToolConfig, load_tool_config
+from generalAgent.tools.config_loader import ToolConfig, load_tool_config
 
 
 @pytest.fixture
@@ -26,7 +26,7 @@ optional:
     always_available: false
 
 directories:
-  builtin: "agentgraph/tools/builtin"
+  builtin: "generalAgent/tools/builtin"
   custom: "custom_tools"
 """)
     return config_file
@@ -69,12 +69,12 @@ def test_get_directories(sample_config):
     """Test getting scan directories."""
     config = ToolConfig(sample_config)
 
-    assert config.get_builtin_directory() == Path("agentgraph/tools/builtin")
+    assert config.get_builtin_directory() == Path("generalAgent/tools/builtin")
     assert config.get_custom_directory() == Path("custom_tools")
 
     scan_dirs = config.get_scan_directories()
     assert len(scan_dirs) == 2
-    assert scan_dirs[0] == Path("agentgraph/tools/builtin")
+    assert scan_dirs[0] == Path("generalAgent/tools/builtin")
     assert scan_dirs[1] == Path("custom_tools")
 
 

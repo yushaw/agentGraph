@@ -7,8 +7,8 @@ from typing import Any, Iterable, List, Optional, Set
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
-from agentgraph.runtime import build_application
-from agentgraph.utils import (
+from generalAgent.runtime import build_application
+from generalAgent.utils import (
     get_logger,
     log_user_message,
     log_agent_response,
@@ -19,9 +19,9 @@ from agentgraph.utils import (
     build_file_upload_reminder,
     FILE_TYPE_TO_SKILL,
 )
-from agentgraph.persistence.session_store import SessionStore
-from agentgraph.persistence.workspace import WorkspaceManager
-from agentgraph.utils.mention_classifier import classify_mentions, group_by_type
+from generalAgent.persistence.session_store import SessionStore
+from generalAgent.persistence.workspace import WorkspaceManager
+from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
 
 
 def _stringify_content(content: Any) -> str:
@@ -268,15 +268,15 @@ async def async_main():
                 state["mentioned_agents"] = all_mentions
 
                 # Classify mentions and load skills to workspace if needed
-                from agentgraph.tools.registry import ToolRegistry
-                from agentgraph.skills.registry import SkillRegistry
+                from generalAgent.tools.registry import ToolRegistry
+                from generalAgent.skills.registry import SkillRegistry
                 from pathlib import Path
 
                 # Get registries (we need these for classification)
                 # Note: In production, these should be passed from build_application
                 # For now, create temporary instances for classification
                 tool_registry_temp = ToolRegistry()
-                skill_registry_temp = SkillRegistry(Path("agentgraph/skills"))
+                skill_registry_temp = SkillRegistry(Path("generalAgent/skills"))
 
                 classifications = classify_mentions(mentions, tool_registry_temp, skill_registry_temp)
                 grouped = group_by_type(classifications)

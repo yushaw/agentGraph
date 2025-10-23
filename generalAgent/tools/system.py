@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import List
 
-from agentgraph.skills import SkillRegistry
+from generalAgent.skills import SkillRegistry
 
 
 def build_skill_tools(skill_registry: SkillRegistry) -> List:

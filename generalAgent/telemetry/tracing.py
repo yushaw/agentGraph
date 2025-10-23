@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from agentgraph.config.settings import ObservabilitySettings
+from generalAgent.config.settings import ObservabilitySettings
 
 
 def configure_tracing(settings: ObservabilitySettings) -> None:

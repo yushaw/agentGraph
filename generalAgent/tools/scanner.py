@@ -28,7 +28,7 @@ def scan_tools_directory(directory: Path) -> Dict[str, BaseTool]:
         Dict mapping tool names to tool instances
 
     Example:
-        tools = scan_tools_directory(Path("agentgraph/tools/builtin"))
+        tools = scan_tools_directory(Path("generalAgent/tools/builtin"))
         # Returns: {"now": <now_tool>, "calc": <calc_tool>, ...}
     """
     tools = {}
@@ -164,8 +164,8 @@ def scan_multiple_directories(directories: List[Path]) -> Dict[str, BaseTool]:
 
     Example:
         tools = scan_multiple_directories([
-            Path("agentgraph/tools/builtin"),
-            Path("agentgraph/tools/custom"),
+            Path("generalAgent/tools/builtin"),
+            Path("generalAgent/tools/custom"),
         ])
     """
     all_tools = {}

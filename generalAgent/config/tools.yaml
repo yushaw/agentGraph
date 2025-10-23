@@ -87,8 +87,8 @@ optional:
 
 # Tool directories
 directories:
-  builtin: "agentgraph/tools/builtin"
-  custom: "agentgraph/tools/custom"    # User-defined tools (optional)
+  builtin: "generalAgent/tools/builtin"
+  custom: "generalAgent/tools/custom"    # User-defined tools (optional)
 
 # Hot reload settings
 hot_reload:

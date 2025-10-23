@@ -53,8 +53,8 @@ class ToolConfig:
             },
             "optional": {},
             "directories": {
-                "builtin": "agentgraph/tools/builtin",
-                "custom": "agentgraph/tools/custom"
+                "builtin": "generalAgent/tools/builtin",
+                "custom": "generalAgent/tools/custom"
             }
         }
 
@@ -124,7 +124,7 @@ class ToolConfig:
             Path to builtin tools directory
         """
         dirs = self.config.get("directories", {})
-        builtin = dirs.get("builtin", "agentgraph/tools/builtin")
+        builtin = dirs.get("builtin", "generalAgent/tools/builtin")
         return Path(builtin)
 
     def get_custom_directory(self) -> Path:
@@ -134,7 +134,7 @@ class ToolConfig:
             Path to custom tools directory
         """
         dirs = self.config.get("directories", {})
-        custom = dirs.get("custom", "agentgraph/tools/custom")
+        custom = dirs.get("custom", "generalAgent/tools/custom")
         return Path(custom)
 
     def get_scan_directories(self) -> List[Path]:
@@ -227,6 +227,6 @@ def load_tool_config(config_path: Path | None = None) -> ToolConfig:
         ToolConfig instance
     """
     if config_path is None:
-        config_path = Path("agentgraph/config/tools.yaml")
+        config_path = Path("generalAgent/config/tools.yaml")
 
     return ToolConfig(config_path)

@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from agentgraph.tools.builtin.run_skill_script import run_skill_script
-from agentgraph.tools.builtin.run_bash_command import run_bash_command
+from generalAgent.tools.builtin.run_skill_script import run_skill_script
+from generalAgent.tools.builtin.run_bash_command import run_bash_command
 
 
 @pytest.fixture

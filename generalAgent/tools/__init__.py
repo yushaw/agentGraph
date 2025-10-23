@@ -1,6 +1,6 @@
 """Tool collections and registries.
 
-Note: Most tools are now auto-discovered via scanner from agentgraph/tools/builtin/.
+Note: Most tools are now auto-discovered via scanner from generalAgent/tools/builtin/.
 Only registry and utilities are exported here.
 """
 

@@ -6,21 +6,21 @@ import logging
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from agentgraph import graph
-from agentgraph.agents import ModelResolver
-from agentgraph.config import get_settings
-from agentgraph.models import build_default_registry
-from agentgraph.persistence import build_checkpointer
-from agentgraph.skills import SkillRegistry
-from agentgraph.telemetry import configure_tracing
-from agentgraph.tools import (
+from generalAgent import graph
+from generalAgent.agents import ModelResolver
+from generalAgent.config import get_settings
+from generalAgent.models import build_default_registry
+from generalAgent.persistence import build_checkpointer
+from generalAgent.skills import SkillRegistry
+from generalAgent.telemetry import configure_tracing
+from generalAgent.tools import (
     ToolMeta,
     ToolRegistry,
     build_skill_tools,
     set_app_graph,
 )
-from agentgraph.tools.scanner import scan_multiple_directories
-from agentgraph.tools.config_loader import load_tool_config
+from generalAgent.tools.scanner import scan_multiple_directories
+from generalAgent.tools.config_loader import load_tool_config
 from .model_resolver import build_model_resolver, resolve_model_configs
 
 LOGGER = logging.getLogger(__name__)
@@ -114,7 +114,7 @@ def build_application(
 
     model_registry = build_default_registry(model_ids)
 
-    skills_root = skills_root or Path("agentgraph/skills")
+    skills_root = skills_root or Path("generalAgent/skills")
     skill_registry = _create_skill_registry(skills_root)
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)

@@ -8,21 +8,21 @@ from typing import Iterable, List
 from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
-from agentgraph.agents import ModelResolver, invoke_planner
-from agentgraph.graph.message_utils import clean_message_history, truncate_messages_safely
-from agentgraph.graph.prompts import PLANNER_SYSTEM_PROMPT, SUBAGENT_SYSTEM_PROMPT, build_dynamic_reminder, build_skills_catalog
-from agentgraph.graph.state import AppState
-from agentgraph.models import ModelRegistry
-from agentgraph.tools import ToolRegistry
-from agentgraph.utils.logging_utils import (
+from generalAgent.agents import ModelResolver, invoke_planner
+from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
+from generalAgent.graph.prompts import PLANNER_SYSTEM_PROMPT, SUBAGENT_SYSTEM_PROMPT, build_dynamic_reminder, build_skills_catalog
+from generalAgent.graph.state import AppState
+from generalAgent.models import ModelRegistry
+from generalAgent.tools import ToolRegistry
+from generalAgent.utils.logging_utils import (
     log_node_entry,
     log_node_exit,
     log_visible_tools,
     log_prompt,
     log_model_selection,
 )
-from agentgraph.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
-from agentgraph.utils.mention_classifier import classify_mentions, group_by_type
+from generalAgent.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
+from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
 
 LOGGER = logging.getLogger("agentgraph.planner")
 

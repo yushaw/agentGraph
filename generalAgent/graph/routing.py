@@ -6,7 +6,7 @@ import logging
 from typing import Literal
 
 from .state import AppState
-from agentgraph.utils.logging_utils import log_routing_decision
+from generalAgent.utils.logging_utils import log_routing_decision
 
 LOGGER = logging.getLogger("agentgraph.routing")
 

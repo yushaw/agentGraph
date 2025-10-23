@@ -4,8 +4,8 @@ import asyncio
 from pathlib import Path
 from langchain_core.messages import HumanMessage
 
-from agentgraph import build_application
-from agentgraph.utils.mention_parser import parse_mentions
+from generalAgent import build_application
+from generalAgent.utils.mention_parser import parse_mentions
 
 
 async def test_scenario_1_simple_calculation():

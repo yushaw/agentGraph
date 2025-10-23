@@ -1,9 +1,9 @@
 """Test ToolRegistry on-demand loading functionality."""
 
 from pathlib import Path
-from agentgraph.tools.registry import ToolRegistry
-from agentgraph.tools.scanner import scan_multiple_directories
-from agentgraph.tools.config_loader import load_tool_config
+from generalAgent.tools.registry import ToolRegistry
+from generalAgent.tools.scanner import scan_multiple_directories
+from generalAgent.tools.config_loader import load_tool_config
 
 
 def test_registry_on_demand():

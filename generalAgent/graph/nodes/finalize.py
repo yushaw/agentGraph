@@ -7,17 +7,17 @@ from typing import List
 
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
-from agentgraph.agents import ModelResolver, invoke_planner
-from agentgraph.graph.message_utils import clean_message_history, truncate_messages_safely
-from agentgraph.graph.prompts import FINALIZE_SYSTEM_PROMPT
-from agentgraph.graph.state import AppState
-from agentgraph.models import ModelRegistry
-from agentgraph.utils.logging_utils import (
+from generalAgent.agents import ModelResolver, invoke_planner
+from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
+from generalAgent.graph.prompts import FINALIZE_SYSTEM_PROMPT
+from generalAgent.graph.state import AppState
+from generalAgent.models import ModelRegistry
+from generalAgent.utils.logging_utils import (
     log_node_entry,
     log_node_exit,
     log_prompt,
 )
-from agentgraph.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
+from generalAgent.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
 
 LOGGER = logging.getLogger("agentgraph.finalize")
 

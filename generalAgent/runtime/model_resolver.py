@@ -7,8 +7,8 @@ from typing import Callable, Dict, Optional, TypedDict
 
 from langchain_openai import ChatOpenAI
 
-from agentgraph.agents import ModelResolver
-from agentgraph.config import Settings
+from generalAgent.agents import ModelResolver
+from generalAgent.config import Settings
 
 
 class ModelConfig(TypedDict):

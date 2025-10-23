@@ -1,7 +1,7 @@
 """Simple test to verify call_subagent initialization."""
 
 import asyncio
-from agentgraph.runtime import build_application
+from generalAgent.runtime import build_application
 from langchain_core.messages import HumanMessage
 
 

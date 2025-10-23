@@ -1,11 +1,11 @@
 """Test extended @mention mechanism (tool, skill, agent)."""
 
 from pathlib import Path
-from agentgraph.tools.registry import ToolRegistry
-from agentgraph.tools.scanner import scan_multiple_directories
-from agentgraph.tools.config_loader import load_tool_config
-from agentgraph.skills import SkillRegistry
-from agentgraph.utils.mention_classifier import classify_mentions, group_by_type
+from generalAgent.tools.registry import ToolRegistry
+from generalAgent.tools.scanner import scan_multiple_directories
+from generalAgent.tools.config_loader import load_tool_config
+from generalAgent.skills import SkillRegistry
+from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
 
 
 def test_mention_classification():
@@ -103,7 +103,7 @@ def test_mention_classification():
 def test_mention_reminders():
     """Test that different mention types generate appropriate reminders."""
 
-    from agentgraph.graph.prompts import build_dynamic_reminder
+    from generalAgent.graph.prompts import build_dynamic_reminder
 
     print("\n=== Testing @Mention Reminders ===\n")
 

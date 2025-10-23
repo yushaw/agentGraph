@@ -57,13 +57,13 @@ pytest -v
 START → agent ⇄ tools → agent → finalize → END
 ```
 
-- **agent** node: LLM decides whether to call tools or finish (agentgraph/graph/nodes/planner.py)
+- **agent** node: LLM decides whether to call tools or finish (generalAgent/graph/nodes/planner.py)
 - **tools** node: Executes tool calls and returns to agent
 - **finalize** node: Final response processing before END
 
 ### Key Components
 
-**State Management** (agentgraph/graph/state.py)
+**State Management** (generalAgent/graph/state.py)
 - `AppState` TypedDict defines all conversation state
 - `messages`: LangChain message history
 - `todos`: Task tracking list (via TodoWrite tool)
@@ -72,21 +72,21 @@ START → agent ⇄ tools → agent → finalize → END
 - `context_id`, `parent_context`: Subagent isolation
 - `loops`, `max_loops`: Loop control
 
-**Model Registry** (agentgraph/models/registry.py)
+**Model Registry** (generalAgent/models/registry.py)
 - Five model slots: base, reasoning, vision, code, chat
 - Models configured via `.env` (MODEL_BASIC_*, MODEL_REASONING_*, etc.)
 - Supports OpenAI-compatible APIs (DeepSeek, Moonshot, GLM, etc.)
 
-**Tool System** (agentgraph/tools/)
+**Tool System** (generalAgent/tools/)
 - Three-tier architecture:
   - `_discovered`: All scanned tools (including disabled)
   - `_tools`: Enabled tools (immediately available)
   - `load_on_demand()`: Load tools when @mentioned
-- Configuration driven by `agentgraph/config/tools.yaml`
-- Builtin tools in `agentgraph/tools/builtin/`
-- Custom tools in `agentgraph/tools/custom/` (user-defined)
+- Configuration driven by `generalAgent/config/tools.yaml`
+- Builtin tools in `generalAgent/tools/builtin/`
+- Custom tools in `generalAgent/tools/custom/` (user-defined)
 
-**Skill System** (agentgraph/skills/)
+**Skill System** (generalAgent/skills/)
 - Skills are **knowledge packages** (documentation + scripts), NOT tool containers
 - Structure: `skills/{skill_id}/SKILL.md` + `scripts/` + reference docs
 - When user mentions `@pdf`, skills are symlinked to session workspace
@@ -94,7 +94,7 @@ START → agent ⇄ tools → agent → finalize → END
 - Agent can use `run_skill_script` tool to execute skill scripts
 - Skills do NOT have `allowed_tools` field
 
-**@Mention System** (agentgraph/utils/mention_classifier.py)
+**@Mention System** (generalAgent/utils/mention_classifier.py)
 - Three types:
   - `@tool` - Load specific tool on demand
   - `@skill` - Generate reminder to read SKILL.md
@@ -103,16 +103,16 @@ START → agent ⇄ tools → agent → finalize → END
 
 ### Important Files
 
-- `agentgraph/runtime/app.py` - Application assembly, tool/skill registry initialization
-- `agentgraph/graph/builder.py` - LangGraph construction, node wiring
-- `agentgraph/graph/nodes/planner.py` - Agent node logic, @mention handling, tool visibility
-- `agentgraph/graph/routing.py` - Conditional edge routing (agent_route, tools_route)
-- `agentgraph/config/settings.py` - Pydantic settings from .env
-- `agentgraph/persistence/session_store.py` - SQLite session persistence
-- `agentgraph/persistence/workspace.py` - Workspace manager for session isolation
-- `agentgraph/tools/builtin/file_ops.py` - File operation tools (read_file, write_file, list_workspace_files)
-- `agentgraph/tools/builtin/run_skill_script.py` - Execute skill scripts
-- `agentgraph/tools/builtin/run_bash_command.py` - Execute bash commands
+- `generalAgent/runtime/app.py` - Application assembly, tool/skill registry initialization
+- `generalAgent/graph/builder.py` - LangGraph construction, node wiring
+- `generalAgent/graph/nodes/planner.py` - Agent node logic, @mention handling, tool visibility
+- `generalAgent/graph/routing.py` - Conditional edge routing (agent_route, tools_route)
+- `generalAgent/config/settings.py` - Pydantic settings from .env
+- `generalAgent/persistence/session_store.py` - SQLite session persistence
+- `generalAgent/persistence/workspace.py` - Workspace manager for session isolation
+- `generalAgent/tools/builtin/file_ops.py` - File operation tools (read_file, write_file, list_workspace_files)
+- `generalAgent/tools/builtin/run_skill_script.py` - Execute skill scripts
+- `generalAgent/tools/builtin/run_bash_command.py` - Execute bash commands
 - `main.py` - CLI entrypoint with streaming, @mention parsing, session/workspace management
 
 ## Workspace Isolation
@@ -181,7 +181,7 @@ run_skill_script(
 
 ## Tool Configuration
 
-Edit `agentgraph/config/tools.yaml` to control tool availability:
+Edit `generalAgent/config/tools.yaml` to control tool availability:
 
 ```yaml
 core:
@@ -210,7 +210,7 @@ optional:
 
 ## Adding New Tools
 
-1. Create tool file in `agentgraph/tools/builtin/` or `agentgraph/tools/custom/`
+1. Create tool file in `generalAgent/tools/builtin/` or `generalAgent/tools/custom/`
 2. Tool function must be decorated with `@tool` from langchain_core.tools
 3. Add configuration to `tools.yaml`:
    ```yaml
@@ -310,12 +310,12 @@ LANGSMITH_API_KEY=your-key
 ## Recent Fixes (2025-10-24)
 
 ### 1. Skills Path Correction
-- **Issue**: Code referenced `Path("skills")` instead of `Path("agentgraph/skills")`
-- **Fixed**: Updated `main.py:268` and `agentgraph/runtime/app.py:117`
+- **Issue**: Code referenced `Path("skills")` instead of `Path("generalAgent/skills")`
+- **Fixed**: Updated `main.py:268` and `generalAgent/runtime/app.py:117`
 
 ### 2. Symlink Path Resolution in list_workspace_files
 - **Issue**: `list_workspace_files` used `resolve()` causing paths outside workspace
-- **Fixed**: `agentgraph/tools/builtin/file_ops.py:214-241` - use logical paths
+- **Fixed**: `generalAgent/tools/builtin/file_ops.py:214-241` - use logical paths
 
 ### 3. Multi-Tool File Support
 - **Issue**: Tool scanner only loaded first tool from files with multiple tools

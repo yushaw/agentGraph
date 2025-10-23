@@ -7,7 +7,7 @@ from typing import Iterable, List
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 
-from agentgraph.models import ModelRegistry
+from generalAgent.models import ModelRegistry
 
 from .interfaces import ModelResolver
 

@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 
-from agentgraph.persistence.workspace import WorkspaceManager
-from agentgraph.tools.builtin.file_ops import read_file, write_file, list_workspace_files
-from agentgraph.tools.builtin.run_skill_script import run_skill_script
+from generalAgent.persistence.workspace import WorkspaceManager
+from generalAgent.tools.builtin.file_ops import read_file, write_file, list_workspace_files
+from generalAgent.tools.builtin.run_skill_script import run_skill_script
 
 
 @pytest.fixture

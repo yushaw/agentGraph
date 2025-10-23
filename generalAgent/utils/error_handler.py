@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import SystemMessage
 
-from agentgraph.graph.state import AppState
+from generalAgent.graph.state import AppState
 
 LOGGER = logging.getLogger(__name__)
 

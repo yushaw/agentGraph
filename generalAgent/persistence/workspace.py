@@ -135,7 +135,7 @@ class WorkspaceManager:
             # Try multiple possible locations
             possible_paths = [
                 Path(f"skills/{skill_id}"),
-                Path(f"agentgraph/skills/{skill_id}"),
+                Path(f"generalAgent/skills/{skill_id}"),
             ]
 
             src = None

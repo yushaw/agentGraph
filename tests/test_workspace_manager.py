@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from agentgraph.persistence.workspace import WorkspaceManager
+from generalAgent.persistence.workspace import WorkspaceManager
 
 
 @pytest.fixture
