@@ -89,12 +89,13 @@ def scan_tools_directory(directory: Path) -> Dict[str, BaseTool]:
                 spec.loader.exec_module(module)
                 LOGGER.debug(f"  Dynamically loaded: {full_module_path}")
 
-            # Find tool in module
-            tool_instance = _extract_tool_from_module(module, module_name)
+            # Find tool(s) in module
+            tool_instances = _extract_tools_from_module(module, module_name)
 
-            if tool_instance:
-                tools[tool_instance.name] = tool_instance
-                LOGGER.info(f"  ✓ Loaded tool: {tool_instance.name} from {tool_file.name}")
+            if tool_instances:
+                for tool_instance in tool_instances:
+                    tools[tool_instance.name] = tool_instance
+                    LOGGER.info(f"  ✓ Loaded tool: {tool_instance.name} from {tool_file.name}")
             else:
                 LOGGER.warning(f"  ✗ No tool found in {tool_file.name}")
 
@@ -105,11 +106,11 @@ def scan_tools_directory(directory: Path) -> Dict[str, BaseTool]:
     return tools
 
 
-def _extract_tool_from_module(module, module_name: str) -> Optional[BaseTool]:
-    """Extract a tool instance from a module.
+def _extract_tools_from_module(module, module_name: str) -> List[BaseTool]:
+    """Extract tool instance(s) from a module.
 
     Tries multiple strategies:
-    1. Look for __all__ export
+    1. Look for __all__ export (can return multiple tools)
     2. Look for variable matching module name
     3. Look for any BaseTool instance
 
@@ -118,19 +119,25 @@ def _extract_tool_from_module(module, module_name: str) -> Optional[BaseTool]:
         module_name: Name of the module (for fallback matching)
 
     Returns:
-        Tool instance if found, None otherwise
+        List of tool instances found (may be empty, single, or multiple)
     """
-    # Strategy 1: Check __all__
+    tools = []
+
+    # Strategy 1: Check __all__ (can have multiple tools)
     if hasattr(module, "__all__"):
         for name in module.__all__:
             obj = getattr(module, name, None)
             if obj and isinstance(obj, BaseTool):
-                return obj
+                tools.append(obj)
+
+        # If we found tools via __all__, return them (may be multiple)
+        if tools:
+            return tools
 
     # Strategy 2: Check for variable matching module name
     obj = getattr(module, module_name, None)
     if obj and isinstance(obj, BaseTool):
-        return obj
+        return [obj]
 
     # Strategy 3: Find any BaseTool instance
     for attr_name in dir(module):
@@ -138,9 +145,10 @@ def _extract_tool_from_module(module, module_name: str) -> Optional[BaseTool]:
             continue
         obj = getattr(module, attr_name)
         if isinstance(obj, BaseTool):
-            return obj
+            # Only return the first one found to avoid duplicates
+            return [obj]
 
-    return None
+    return []
 
 
 def scan_multiple_directories(directories: List[Path]) -> Dict[str, BaseTool]:

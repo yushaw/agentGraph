@@ -12,6 +12,8 @@ from .logging_utils import (
     setup_logging,
 )
 from .mention_parser import format_mention_reminder, parse_mentions
+from .file_upload_parser import parse_file_mentions
+from .file_processor import process_file, build_file_upload_reminder, ProcessedFile, FILE_TYPE_TO_SKILL
 from .error_handler import (
     with_error_boundary,
     safe_tool_call,
@@ -35,6 +37,11 @@ __all__ = [
     "log_agent_response",
     "parse_mentions",
     "format_mention_reminder",
+    "parse_file_mentions",
+    "process_file",
+    "build_file_upload_reminder",
+    "ProcessedFile",
+    "FILE_TYPE_TO_SKILL",
     "with_error_boundary",
     "safe_tool_call",
     "handle_model_error",

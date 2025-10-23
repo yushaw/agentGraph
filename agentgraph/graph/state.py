@@ -46,5 +46,6 @@ class AppState(TypedDict, total=False):
     model_pref: Optional[str]  # User's preferred model type (e.g., "vision", "code")
 
     # ========== Session context ==========
-    thread_id: Optional[str]  # Session identifier for persistence
-    user_id: Optional[str]    # User identifier (for future personalization)
+    thread_id: Optional[str]     # Session identifier for persistence
+    user_id: Optional[str]       # User identifier (for future personalization)
+    workspace_path: Optional[str]  # Isolated workspace directory for this session

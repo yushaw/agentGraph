@@ -114,7 +114,7 @@ def build_application(
 
     model_registry = build_default_registry(model_ids)
 
-    skills_root = skills_root or Path("skills")
+    skills_root = skills_root or Path("agentgraph/skills")
     skill_registry = _create_skill_registry(skills_root)
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)
@@ -158,6 +158,7 @@ def build_application(
             "max_loops": max_loops,
             "thread_id": None,
             "user_id": None,
+            "workspace_path": None,  # Set by main.py when session starts
         }
 
     return app, initial_state

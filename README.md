@@ -48,34 +48,110 @@ The settings object also exposes `max_loops` and `max_step_calls` to bound deleg
 
 ## Skills
 
-Skill manifests live under `skills/<skill_id>/SKILL.yaml`:
+Skills are **knowledge packages** (documentation + scripts), NOT tool containers. Each skill provides:
 
-```yaml
-id: pptx
-name: Make a presentation
-description: Create a PPTX deck from a topic outline.
-version: 0.1.0
-inputs_schema:
-  type: object
-  properties:
-    topic: { type: string }
-allowed_tools: [draft_outline, generate_pptx]
+- **SKILL.md** - Main documentation with usage guide
+- **scripts/** - Python scripts for specific tasks (e.g., `fill_pdf_form.py`)
+- **Reference docs** - Additional documentation (forms.md, reference.md, etc.)
+
+Example structure:
+```
+skills/pdf/
+├── SKILL.md           # Main skill documentation
+├── forms.md           # PDF form filling guide
+├── reference.md       # Advanced usage reference
+└── scripts/           # Executable Python scripts
+    ├── fill_fillable_fields.py
+    ├── extract_form_field_info.py
+    └── convert_pdf_to_images.py
 ```
 
-Example: `skills/weather/SKILL.yaml` exposes the `get_weather` tool, which calls the Open-Meteo geocoding + forecast APIs to return real-time conditions for a requested city.
+When a user mentions `@pdf`, the system:
+1. Loads the skill into the session workspace (symlink)
+2. Generates a reminder for the agent to read `SKILL.md`
+3. Agent reads documentation and executes scripts as needed
 
-Use `SkillRegistry` to reload manifests at runtime. Skills are accessed by reading `SKILL.md` files directly using the Read tool.
+**Important**: Skills do NOT have `allowed_tools` - they are documentation packages that guide the agent.
+
+## Workspace Isolation
+
+Each session gets an isolated workspace directory for safe file operations:
+
+```
+data/workspace/{session_id}/
+├── skills/           # Symlinked skills (read-only)
+│   └── pdf/
+│       ├── SKILL.md
+│       └── scripts/
+├── uploads/          # User-uploaded files
+├── outputs/          # Agent-generated files
+├── temp/             # Temporary files
+└── .metadata.json    # Session metadata
+```
+
+**File operation tools**:
+- `read_file` - Read files from workspace (skills/, uploads/, outputs/)
+- `write_file` - Write files to workspace (outputs/, temp/)
+- `list_workspace_files` - List workspace directory contents
+- `run_skill_script` - Execute Python scripts from skills (optional, disabled by default)
+
+**Security features**:
+- Path traversal protection (cannot access files outside workspace)
+- Write restrictions (can only write to outputs/, temp/, uploads/)
+- Skills are read-only (symlinked or copied)
+- Automatic cleanup on exit (workspaces older than 7 days)
+- Manual cleanup via `/clean` command
+
+## File Upload
+
+Users can upload files to the agent using `#filename` syntax from the `uploads/` directory:
+
+```bash
+# Put files in uploads/ directory
+uploads/
+├── document.pdf
+├── screenshot.png
+└── data.txt
+
+# Reference in conversation
+You> 分析这张图 #screenshot.png
+You> 处理这个文档 #document.pdf
+```
+
+**Automatic handling**:
+- **Images** (.png, .jpg, etc.): Base64 encoded + injected into message → vision model
+- **PDFs** (.pdf): Copied to workspace + auto-load @pdf skill
+- **Text files** (<10KB): Content directly injected into message
+- **Others**: Copied to workspace for agent tool processing
+
+**File type limits**:
+- Images: 10MB
+- PDFs: 50MB
+- Text/Code: 5MB
+- Office docs: 20MB
+
+See `uploads/README.md` for examples and detailed usage.
 
 ## Tools
 
-- `agentgraph.tools.base` – always-on, read-only utilities (`now`, `calc`, `format_json`).
-- `agentgraph.tools.base` – always-on, read-only utilities (`now`, `calc`, `format_json`, `start_decomposition`).
-- `agentgraph.tools.business` – example business tools (outline generation, HTTP stub, PPTX stub, vision placeholder, weather lookup).
-- `agentgraph.tools.system` – binds skill discovery tools to the active registry.
-- `agentgraph.skills.weather.toolkit` – reusable Open-Meteo client utilities (`fetch_weather`, `WeatherReport`).
-- `ToolMeta` records risk tags and whether a tool is globally available.
+Core tools (always enabled):
+- `now` - Get current UTC time
+- `todo_write`, `todo_read` - Task tracking
+- `call_subagent` - Delegate tasks to subagents
+- `read_file`, `write_file`, `list_workspace_files` - File operations
 
-Update `ToolMeta` when adding new tools so the guard node can enforce policies.
+Optional tools (can be enabled via tools.yaml):
+- `http_fetch` - HTTP requests (stub)
+- `extract_links` - Link extraction (stub)
+- `ask_vision` - Vision perception (stub)
+- `run_skill_script` - Execute Python scripts (disabled by default)
+- `run_bash_command` - Execute bash commands (disabled by default)
+
+**Tool Development**:
+- Tools are automatically discovered by scanning `agentgraph/tools/builtin/`
+- Multiple tools can be defined in a single file using `__all__` export
+- Configuration is managed via `agentgraph/config/tools.yaml`
+- See `agentgraph/tools/builtin/file_ops.py` for multi-tool file example
 
 ## LangGraph Flow
 
