@@ -1,21 +1,25 @@
-"""Finalize node that produces a closing assistant response."""
+"""Finalize node that produces a closing assistant response - Charlie MVP Edition."""
 
 from __future__ import annotations
 
+import logging
 from typing import List
 
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 from agentgraph.agents import ModelResolver, invoke_planner
-from agentgraph.graph.message_utils import clean_message_history
-from agentgraph.graph.prompts import PLANNER_SYSTEM_PROMPT
+from agentgraph.graph.message_utils import clean_message_history, truncate_messages_safely
+from agentgraph.graph.prompts import FINALIZE_SYSTEM_PROMPT
 from agentgraph.graph.state import AppState
 from agentgraph.models import ModelRegistry
-
-FINALIZE_PROMPT = (
-    "You are finishing the conversation. Summarize the tool results for the user. "
-    "Do not call any tools. Respond in the user's language."
+from agentgraph.utils.logging_utils import (
+    log_node_entry,
+    log_node_exit,
+    log_prompt,
 )
+from agentgraph.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
+
+LOGGER = logging.getLogger("agentgraph.finalize")
 
 
 def build_finalize_node(
@@ -23,30 +27,61 @@ def build_finalize_node(
     model_registry: ModelRegistry,
     model_resolver: ModelResolver,
 ):
-    def finalize_node(state: AppState) -> AppState:
+    @with_error_boundary("finalize")
+    async def finalize_node(state: AppState) -> AppState:
+        log_node_entry(LOGGER, "finalize", state)
+
         history: List[BaseMessage] = list(state.get("messages") or [])
-        if not history or not isinstance(history[-1], ToolMessage):
-            return {}
-        if history[-1].name in {"list_skills", "select_skill"}:
+
+        # Skip finalize if no messages or last message is not a tool result
+        if not history:
+            LOGGER.info("No messages in history, skipping finalize")
             return {}
 
-        # Clean message history to remove AI messages with unanswered tool_calls
-        # This is critical for OpenAI API compatibility
-        cleaned_history = _clean_message_history(history)
+        if not isinstance(history[-1], ToolMessage):
+            LOGGER.info(f"Last message is not a tool result (type={type(history[-1]).__name__}), skipping finalize")
+            return {}
+
+        # Skip finalize for meta operations (skill selection)
+        if history[-1].name in {"list_skills", "select_skill"}:
+            LOGGER.info(f"Last tool was meta operation ({history[-1].name}), skipping finalize")
+            return {}
+
+        LOGGER.info(f"Generating final response (last tool: {history[-1].name})...")
+
+        # Clean and safely truncate message history (keep last 20 messages - token optimization)
+        cleaned_history = clean_message_history(history)
+        recent_history = truncate_messages_safely(cleaned_history, keep_recent=20)
+        LOGGER.info(f"  - Message history: {len(history)} → {len(cleaned_history)} (cleaned) → {len(recent_history)} (kept)")
+
+        # Log the finalize prompt
+        log_prompt(LOGGER, "finalize", FINALIZE_SYSTEM_PROMPT)
 
         prompt_messages = [
-            SystemMessage(content=PLANNER_SYSTEM_PROMPT),
-            SystemMessage(content=FINALIZE_PROMPT),
-            *cleaned_history
+            SystemMessage(content=FINALIZE_SYSTEM_PROMPT),
+            *recent_history
         ]
-        output = invoke_planner(
-            model_registry=model_registry,
-            model_resolver=model_resolver,
-            tools=[],
-            messages=prompt_messages,
-            need_code=False,
-            preference=state.get("model_pref"),
-        )
-        return {"messages": [output]}
+
+        LOGGER.info("Invoking finalize LLM (no tools)...")
+
+        try:
+            output = await invoke_planner(
+                model_registry=model_registry,
+                model_resolver=model_resolver,
+                tools=[],  # No tools in finalize stage
+                messages=prompt_messages,
+                need_code=False,
+                need_vision=False,
+                preference=state.get("model_pref"),
+            )
+        except Exception as e:
+            LOGGER.error(f"Finalize model invocation failed: {e}")
+            error_msg = handle_model_error(e)
+            raise ModelInvocationError(str(e), user_message=error_msg)
+
+        LOGGER.info("Finalize completed, returning final response")
+        updates = {"messages": [output]}
+        log_node_exit(LOGGER, "finalize", updates)
+        return updates
 
     return finalize_node

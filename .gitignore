@@ -8,3 +8,15 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Runtime artifacts
+logs/
+data/
+*.db
+*.sqlite
+*.log
+
+# Local tooling
+.DS_Store
+.vscode/
+.idea/

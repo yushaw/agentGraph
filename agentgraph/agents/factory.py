@@ -12,13 +12,14 @@ from agentgraph.models import ModelRegistry
 from .interfaces import ModelResolver
 
 
-def invoke_planner(
+async def invoke_planner(
     *,
     model_registry: ModelRegistry,
     model_resolver: ModelResolver,
     tools: Iterable[BaseTool],
     messages: List[BaseMessage],
     need_code: bool = False,
+    need_vision: bool = False,
     preference: str | None = None,
 ):
     """Run the planner model with the provided messages and tools."""
@@ -27,15 +28,15 @@ def invoke_planner(
         phase="plan",
         require_tools=True,
         need_code=need_code,
-        need_vision=False,
+        need_vision=need_vision,
         preference=preference,
     )
     model = model_resolver(spec.model_id)
     runnable = model.bind_tools(list(tools))
-    return runnable.invoke(messages)
+    return await runnable.ainvoke(messages)
 
 
-def invoke_subagent(
+async def invoke_subagent(
     *,
     model_registry: ModelRegistry,
     model_resolver: ModelResolver,
@@ -54,7 +55,7 @@ def invoke_subagent(
     )
     model = model_resolver(spec.model_id)
     runnable = model.bind_tools(list(tools))
-    return runnable.invoke(messages)
+    return await runnable.ainvoke(messages)
 
 
 # def get_decomposer_model(

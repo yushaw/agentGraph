@@ -19,6 +19,7 @@ from agentgraph.tools import (
     ask_vision,
     build_skill_tools,
     calc,
+    call_external_agent,
     draft_outline,
     extract_links,
     format_json,
@@ -50,6 +51,7 @@ def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, 
         extract_links,
         ask_vision,
         get_weather,
+        call_external_agent,
     ]:
         registry.register_tool(tool)
 
@@ -69,6 +71,7 @@ def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, 
         ToolMeta("extract_links", "read", ["read"]),
         ToolMeta("ask_vision", "read", ["vision"]),
         ToolMeta("get_weather", "network", ["network", "read"]),
+        ToolMeta("call_external_agent", "network", ["agent", "network"], always_available=False),
     ]
     for item in metadata:
         registry.register_meta(item)
@@ -105,34 +108,20 @@ def build_application(
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)
 
     subagent_catalog = {
-        "research": ["ask_vision", "http_fetch", "extract_links", "get_weather", "now", "calc", "format_json"],
+        "research": ["ask_vision", "http_fetch", "extract_links", "get_weather", "call_external_agent", "now", "calc", "format_json"],
         "writer": ["draft_outline", "generate_pptx", "now", "calc", "format_json"],
         "weather": ["get_weather", "now", "calc", "format_json"],
+        "coordinator": ["call_external_agent", "now", "calc", "format_json"],  # 专门用于协调多个 agent
     }
 
-    deliverable_checkers: Dict[str, Callable[[dict], bool]] = {
-        "analysis_notes": lambda payload: bool(payload.get("notes")) if isinstance(payload, dict) else False,
-        "outline_json": lambda payload: isinstance(payload, dict)
-        and isinstance(payload.get("outline"), list)
-        and len(payload.get("outline", [])) >= 5,
-        "file": lambda payload: isinstance(payload, dict) and isinstance(payload.get("file"), str),
-        "weather_report": lambda payload: isinstance(payload, dict)
-        and payload.get("ok")
-        and isinstance(payload.get("weather"), dict)
-        and "city" in payload["weather"]
-        and "temperature_c" in payload["weather"],
-    }
-
-    default_policy = {"auto_approve_writes": settings.governance.auto_approve_writes}
     max_loops = settings.governance.max_loops
     max_step_calls = settings.governance.max_step_calls
 
-    checkpointer = None
-    if settings.observability.postgres_dsn:
-        try:
-            checkpointer = build_checkpointer(settings.observability.postgres_dsn)
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Postgres checkpointer disabled: %s", exc)
+    # Build SQLite checkpointer for session persistence (always enabled by default)
+    # The checkpointer is a wrapper that implements async context manager
+    checkpointer = build_checkpointer(settings.observability.session_db_path)
+    if checkpointer:
+        LOGGER.info("Session persistence enabled (SQLite)")
 
     resolver = model_resolver or build_model_resolver(model_configs)
 
@@ -142,8 +131,6 @@ def build_application(
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
         subagent_catalog=subagent_catalog,
-        deliverable_checkers=deliverable_checkers,
-        default_policy=default_policy,
         skill_registry=skill_registry,
         checkpointer=checkpointer,
     )
@@ -154,7 +141,8 @@ def build_application(
             "images": [],
             "active_skill": None,
             "allowed_tools": [],
-            "evidence": [],
+            "mentioned_agents": [],
+            "persistent_tools": [],
             "model_pref": None,
             "plan": None,
             "step_idx": 0,
@@ -162,12 +150,11 @@ def build_application(
             "max_step_calls": max_step_calls,
             "loops": 0,
             "max_loops": max_loops,
-            "execution_phase": "initial",  # NEW: Track which phase we're in
-            "task_complexity": "unknown",   # NEW: Track task complexity
-            "complexity_reason": None,      # NEW: Why complex/simple
-            "policy": {"auto_approve_writes": settings.governance.auto_approve_writes},
-            "awaiting_approval": False,
-            "pending_calls": [],
+            "execution_phase": "initial",
+            "task_complexity": "unknown",
+            "complexity_reason": None,
+            "thread_id": None,
+            "user_id": None,
         }
 
     return app, initial_state

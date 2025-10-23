@@ -99,7 +99,11 @@ class ObservabilitySettings(BaseModel):
     )
     langsmith_endpoint: Optional[str] = Field(default=None, alias="LANGCHAIN_ENDPOINT")
     tracing_enabled: bool = Field(default=False, alias="LANGCHAIN_TRACING_V2")
-    postgres_dsn: Optional[str] = Field(default=None, alias="PG_DSN")
+
+    # Session persistence database path
+    # Default: ./data/sessions.db (SQLite)
+    # Set to empty string to disable persistence
+    session_db_path: Optional[str] = Field(default=None, alias="SESSION_DB_PATH")
 
 
 class Settings(BaseSettings):
