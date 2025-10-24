@@ -16,7 +16,7 @@ def todo_write(
     Don't use: Single task, trivial tasks (<3 steps), conversational requests
 
     Task states: pending | in_progress | completed
-    Required fields: content (imperative), activeForm (present continuous), status
+    Required fields: content, status
     Optional fields: id (auto-generated if missing), priority (default: medium)
 
     Rules:
@@ -26,20 +26,20 @@ def todo_write(
     - Don't mark completed if tests fail, errors occur, or incomplete
 
     Args:
-        todos: List of {content, activeForm, status, id (optional), priority (optional)}
+        todos: List of {content, status, id (optional), priority (optional)}
 
     Examples:
         todo_write([
-            {"content": "Analyze code", "activeForm": "Analyzing code", "status": "in_progress"},
-            {"content": "Implement feature", "activeForm": "Implementing feature", "status": "pending"}
+            {"content": "分析代码", "status": "in_progress"},
+            {"content": "实现功能", "status": "pending"}
         ])
     """
     # Validate todos
     for todo in todos:
-        if "content" not in todo or "status" not in todo or "activeForm" not in todo:
+        if "content" not in todo or "status" not in todo:
             return {
                 "ok": False,
-                "error": "Each todo must have 'content', 'status', and 'activeForm' fields"
+                "error": "Each todo must have 'content' and 'status' fields"
             }
 
         if todo["status"] not in ["pending", "in_progress", "completed"]:
