@@ -161,4 +161,4 @@ def build_application(
             "workspace_path": None,  # Set by main.py when session starts
         }
 
-    return app, initial_state
+    return app, initial_state, skill_registry

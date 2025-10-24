@@ -79,13 +79,16 @@ def _print_new_messages(messages: Iterable[Any], start_index: int, seen_tools: S
 
 
 async def async_main():
-    # Initialize logger, session store, and workspace manager
+    # Initialize logger, session store
     logger = get_logger()
     session_store = SessionStore()
-    workspace_manager = WorkspaceManager()
 
     try:
-        app, initial_state_factory = build_application()
+        app, initial_state_factory, skill_registry = build_application()
+
+        # Initialize workspace manager with skill_registry for dependency management
+        workspace_manager = WorkspaceManager(skill_registry=skill_registry)
+
         state = initial_state_factory()
 
         # Generate thread_id for this session

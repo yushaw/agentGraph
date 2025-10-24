@@ -230,6 +230,7 @@ optional:
    ```
    skills/<skill_id>/
    ├── SKILL.md           # Main documentation (required)
+   ├── requirements.txt   # Python dependencies (optional)
    ├── reference.md       # Additional reference (optional)
    ├── forms.md           # Specific guides (optional)
    └── scripts/           # Python scripts (optional)
@@ -243,7 +244,16 @@ optional:
    - Examples
    - References to scripts (if any)
 
-3. Add metadata to skill registry (if needed)
+3. **(Optional) Dependency Management:**
+   - If scripts require external libraries, create `requirements.txt`
+   - Example `skills/pdf/requirements.txt`:
+     ```
+     pypdf2>=3.0.0
+     reportlab>=4.0.0
+     pillow>=10.0.0
+     ```
+   - Dependencies are **automatically installed** when user first @mentions the skill
+   - Installation happens once per session, cached for future use
 
 4. Skills are automatically available when user @mentions them
 
@@ -251,10 +261,40 @@ Example workflow:
 ```
 User> @pdf 帮我填写这个PDF表单
 System> [检测到 @pdf]
+        [检查依赖: skills/pdf/requirements.txt]
+        [自动安装: pip install -r requirements.txt]  # 首次使用时
         [已加载技能: pdf]
 Agent> [Uses read_file to read skills/pdf/SKILL.md]
        [Follows instructions from SKILL.md]
        [Uses run_skill_script to execute fill_fillable_fields.py]
+```
+
+### Dependency Installation Details
+
+**When:** Dependencies are installed automatically when:
+- User @mentions a skill for the first time in a session
+- The skill has a `requirements.txt` file
+
+**How it works:**
+1. **Automatic detection**: WorkspaceManager checks for `requirements.txt` when linking skill
+2. **One-time install**: Dependencies installed once, marked as cached in SkillRegistry
+3. **Graceful degradation**: If installation fails, agent receives friendly error message
+
+**Error handling:**
+- Script import errors show clear message: "缺少 Python 模块 'module_name'"
+- Suggests manual installation: `pip install module_name`
+- Agent can inform user and request manual intervention if needed
+
+**Example error message:**
+```
+Script execution failed: Missing dependency
+
+错误: 缺少 Python 模块 'pypdf2'
+
+建议操作:
+1. 检查 skills/pdf/requirements.txt 是否包含此依赖
+2. 手动安装: pip install pypdf2
+3. 或联系技能维护者添加依赖声明
 ```
 
 ## Model Configuration

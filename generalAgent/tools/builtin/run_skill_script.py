@@ -120,13 +120,40 @@ def run_skill_script(
 
         # Combine stdout and stderr
         output = result.stdout
-        if result.stderr:
-            output += f"\n[stderr]\n{result.stderr}"
+        stderr = result.stderr
 
         if result.returncode != 0:
             LOGGER.warning(f"Script exited with code {result.returncode}: {script_name}")
-            return f"Script execution failed (exit code {result.returncode}):\n{output}"
 
+            # Check for ImportError/ModuleNotFoundError
+            error_output = output + (stderr or "")
+            if "ModuleNotFoundError" in error_output or "ImportError" in error_output:
+                # Extract missing module name
+                import re
+                match = re.search(r"No module named ['\"]([^'\"]+)['\"]", error_output)
+                missing_module = match.group(1) if match else "unknown"
+
+                return f"""Script execution failed: Missing dependency
+
+错误: 缺少 Python 模块 '{missing_module}'
+
+建议操作:
+1. 检查 skills/{skill_id}/requirements.txt 是否包含此依赖
+2. 手动安装: pip install {missing_module}
+3. 或联系技能维护者添加依赖声明
+
+详细错误:
+{error_output}"""
+
+            # Other errors
+            full_output = output
+            if stderr:
+                full_output += f"\n[stderr]\n{stderr}"
+            return f"Script execution failed (exit code {result.returncode}):\n{full_output}"
+
+        # Success
+        if stderr:
+            output += f"\n[stderr]\n{stderr}"
         LOGGER.info(f"Script completed successfully: {script_name}")
         return output or "Script completed (no output)"
 

@@ -27,14 +27,16 @@ class WorkspaceManager:
     - Jupyter Notebook (structured data directories)
     """
 
-    def __init__(self, root_dir: Path | str = "data/workspace"):
+    def __init__(self, root_dir: Path | str = "data/workspace", skill_registry=None):
         """Initialize workspace manager.
 
         Args:
             root_dir: Root directory for all workspaces
+            skill_registry: SkillRegistry for dependency management (optional)
         """
         self.root = Path(root_dir)
         self.root.mkdir(parents=True, exist_ok=True)
+        self.skill_registry = skill_registry
         LOGGER.info(f"WorkspaceManager initialized: {self.root.resolve()}")
 
     def create_session_workspace(
@@ -149,6 +151,15 @@ class WorkspaceManager:
                 continue
 
             dst = skills_dir / skill_id
+
+            # Install dependencies if needed
+            if self.skill_registry:
+                success, msg = self.skill_registry.ensure_dependencies(skill_id)
+                if not success:
+                    LOGGER.warning(f"  ⚠ Dependency installation failed for {skill_id}: {msg}")
+                    # Continue anyway, script execution will show detailed error
+                elif "installed successfully" in msg:
+                    LOGGER.info(f"  ✓ Dependencies installed for {skill_id}")
 
             # Use symlink for fast, read-only access
             try:

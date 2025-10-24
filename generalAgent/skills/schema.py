@@ -25,6 +25,7 @@ class SkillMeta(BaseModel):
     description: str = Field(min_length=1)
     version: str = Field(default="0.1.0")
     path: Optional[Path] = None
+    dependencies_installed: bool = Field(default=False, description="Whether requirements.txt has been installed")
     # Removed: inputs_schema, allowed_tools (legacy concepts)
 
 
