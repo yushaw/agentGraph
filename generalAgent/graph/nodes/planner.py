@@ -10,7 +10,13 @@ from langchain_core.tools import BaseTool
 
 from generalAgent.agents import ModelResolver, invoke_planner
 from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
-from generalAgent.graph.prompts import PLANNER_SYSTEM_PROMPT, SUBAGENT_SYSTEM_PROMPT, build_dynamic_reminder, build_skills_catalog
+from generalAgent.graph.prompts import (
+    PLANNER_SYSTEM_PROMPT,
+    SUBAGENT_SYSTEM_PROMPT,
+    build_dynamic_reminder,
+    build_skills_catalog,
+    get_current_datetime_tag,
+)
 from generalAgent.graph.state import AppState
 from generalAgent.models import ModelRegistry
 from generalAgent.tools import ToolRegistry
@@ -203,13 +209,16 @@ def build_planner_node(
         context_id = state.get("context_id", "main")
         is_subagent = context_id != "main" and context_id.startswith("subagent-")
 
+        # Get current datetime tag
+        datetime_tag = get_current_datetime_tag()
+
         if is_subagent:
             # Subagent: use task-focused prompt, no reminders
-            base_prompt = SUBAGENT_SYSTEM_PROMPT
+            base_prompt = f"{datetime_tag}\n\n{SUBAGENT_SYSTEM_PROMPT}"
             LOGGER.info(f"  - Using SUBAGENT prompt for context: {context_id}")
         else:
             # Main agent: use conversational prompt with reminders
-            base_prompt = PLANNER_SYSTEM_PROMPT
+            base_prompt = f"{datetime_tag}\n\n{PLANNER_SYSTEM_PROMPT}"
 
             # Add skills catalog (model-invoked pattern)
             skills_catalog = build_skills_catalog(skill_registry)

@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
 
 from generalAgent.agents import ModelResolver, invoke_planner
 from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
-from generalAgent.graph.prompts import FINALIZE_SYSTEM_PROMPT
+from generalAgent.graph.prompts import FINALIZE_SYSTEM_PROMPT, get_current_datetime_tag
 from generalAgent.graph.state import AppState
 from generalAgent.models import ModelRegistry
 from generalAgent.utils.logging_utils import (
@@ -52,11 +52,15 @@ def build_finalize_node(
         recent_history = truncate_messages_safely(cleaned_history, keep_recent=max_message_history)
         LOGGER.info(f"  - Message history: {len(history)} → {len(cleaned_history)} (cleaned) → {len(recent_history)} (kept)")
 
+        # Add current datetime to prompt
+        datetime_tag = get_current_datetime_tag()
+        finalize_prompt = f"{datetime_tag}\n\n{FINALIZE_SYSTEM_PROMPT}"
+
         # Log the finalize prompt with truncation
-        log_prompt(LOGGER, "finalize", FINALIZE_SYSTEM_PROMPT, max_length=500)
+        log_prompt(LOGGER, "finalize", finalize_prompt, max_length=500)
 
         prompt_messages = [
-            SystemMessage(content=FINALIZE_SYSTEM_PROMPT),
+            SystemMessage(content=finalize_prompt),
             *recent_history
         ]
 

@@ -50,6 +50,16 @@ core:
     tags: ["execute", "bash", "shell"]
     description: "Execute bash commands in workspace (dangerous, use carefully)"
 
+  fetch_web:
+    category: "network"
+    tags: ["network", "read", "web"]
+    description: "Fetch web pages and convert to markdown using Jina Reader"
+
+  web_search:
+    category: "network"
+    tags: ["network", "search", "web"]
+    description: "Search the web with LLM-friendly results using Jina Search"
+
 # Optional tools - Can be enabled/disabled
 optional:
 

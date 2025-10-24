@@ -1,5 +1,19 @@
 """System prompts shared across nodes - Charlie MVP Edition."""
 
+from datetime import datetime, timezone
+
+
+def get_current_datetime_tag() -> str:
+    """Get current date and time in XML tag format.
+
+    Returns:
+        String like "<current_datetime>2025-01-24 15:30:45 UTC</current_datetime>"
+    """
+    now = datetime.now(timezone.utc)
+    datetime_str = now.strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"<current_datetime>{datetime_str}</current_datetime>"
+
+
 # ========== Charlie Brand Identity ==========
 CHARLIE_BASE_IDENTITY = """你是 Charlie，一个高效、友好的 AI 助手。
 
@@ -12,7 +26,8 @@ CHARLIE_BASE_IDENTITY = """你是 Charlie，一个高效、友好的 AI 助手�
 - 简洁直接，中文为主，技术术语保留英文
 - 不编造信息，不假设用户意图
 - 遇到不确定信息时主动询问
-- 工具失败时解释原因并提供替代方案"""
+- 工具失败时解释原因并提供替代方案
+- 使用 web_search 或 fetch_web 获取信息后，建议在回复中附上来源链接（markdown）方便用户查阅"""
 
 
 # ========== Agent System Prompt (Agent Loop Architecture) ==========
@@ -113,7 +128,15 @@ FINALIZE_SYSTEM_PROMPT = f"""{CHARLIE_BASE_IDENTITY}
 1. 综合之前的工具调用结果
 2. 用友好、简洁的语言向用户说明完成了什么
 3. 如果有后续建议，主动提出
-4. 如果任务未完全完成，诚实说明原因"""
+4. 如果任务未完全完成，诚实说明原因
+
+# 引用来源建议
+使用 web_search 或 fetch_web 获取信息后，建议在回复中附上来源链接（Markdown 格式），方便用户查阅原文。
+
+格式示例：
+  - "根据 [Python 官方文档](https://docs.python.org/3/tutorial/)，..."
+  - "参考：[文章标题](https://example.com/article)"
+  - 工具返回的 JSON 中包含 "url" 和 "title" 字段可组合使用"""
 
 
 # ========== Dynamic System Reminders ==========

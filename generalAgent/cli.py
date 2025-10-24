@@ -312,6 +312,15 @@ class GeneralAgentCLI(BaseCLI):
         """Print a single message with appropriate formatting."""
         role, text = self._role_and_text(msg)
 
+        # Print tool calls if present (before text content)
+        if role in {"assistant", "ai"} and hasattr(msg, "tool_calls") and msg.tool_calls:
+            for tool_call in msg.tool_calls:
+                tool_name = tool_call.get("name", "unknown")
+                tool_args = tool_call.get("args", {})
+                # Format args concisely
+                args_str = self._format_tool_args(tool_args)
+                print(f">> [call] {tool_name}({args_str})")
+
         if not text:
             return
 
@@ -323,7 +332,49 @@ class GeneralAgentCLI(BaseCLI):
                 return
             if tool_id:
                 self.printed_tool_ids.add(tool_id)
-            print(f"[tool] {text}")
+            print(f"<< [result] {text}")
+
+    @staticmethod
+    def _format_tool_args(args: dict, max_length: int = 80) -> str:
+        """Format tool arguments for display.
+
+        Args:
+            args: Tool arguments dictionary
+            max_length: Maximum length for formatted string
+
+        Returns:
+            Formatted argument string
+        """
+        if not args:
+            return ""
+
+        # Format each argument
+        parts = []
+        for key, value in args.items():
+            if isinstance(value, str):
+                # Truncate long strings
+                if len(value) > 40:
+                    value_str = f'"{value[:37]}..."'
+                else:
+                    value_str = f'"{value}"'
+            elif isinstance(value, list):
+                # Show list length for long lists
+                if len(value) > 3:
+                    value_str = f"[{len(value)} items]"
+                else:
+                    value_str = str(value)
+            else:
+                value_str = str(value)
+
+            parts.append(f"{key}={value_str}")
+
+        result = ", ".join(parts)
+
+        # Truncate if too long
+        if len(result) > max_length:
+            result = result[:max_length-3] + "..."
+
+        return result
 
     @staticmethod
     def _role_and_text(message: BaseMessage) -> tuple[str, str]:

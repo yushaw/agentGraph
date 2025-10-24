@@ -141,9 +141,11 @@ Core tools (always enabled):
 - `todo_write`, `todo_read` - Task tracking
 - `call_subagent` - Delegate tasks to subagents
 - `read_file`, `write_file`, `list_workspace_files` - File operations
+- `fetch_web` - Fetch web pages and convert to LLM-friendly markdown (Jina Reader)
+- `web_search` - Search the web with LLM-optimized results (Jina Search)
 
 Optional tools (can be enabled via tools.yaml):
-- `http_fetch` - HTTP requests (stub)
+- `http_fetch` - HTTP requests (stub, deprecated - use fetch_web instead)
 - `extract_links` - Link extraction (stub)
 - `ask_vision` - Vision perception (stub)
 - `run_bash_command` - Execute bash commands and Python scripts (disabled by default)
@@ -227,4 +229,186 @@ Routing helpers in `generalAgent.graph.routing` decide whether to decompose and 
 - `generalAgent/graph/nodes/planner.py` - 使用配置的消息历史长度
 - `generalAgent/graph/nodes/finalize.py` - 同上
 - `.env.example` - 添加配置说明
+
+### 2025-10-24 - 修复 web_search language 参数问题
+
+**问题**：
+模型会传递 `language="zh"` 参数给 web_search，但 Jina Search API 不支持大多数语言代码（除了 "en"），导致搜索失败并返回 400 错误。
+
+**解决方案**：
+1. 在工具实现中忽略 `language` 参数（注释掉传递给 API 的代码）
+2. 保留参数定义以保持向后兼容
+3. 更新 docstring 移除 language 参数说明
+4. 强调查询语言自动检测，无需手动指定
+
+**修复效果**：
+- ✅ 模型传递 `language="zh"` 不再导致错误
+- ✅ 中文查询正常工作（语言自动检测）
+- ✅ 英文查询正常工作
+
+**相关文件**：
+- `generalAgent/tools/builtin/jina_search.py` - 注释 language 参数传递，更新 docstring
+
+### 2025-10-24 - Prompt 优化：鼓励引用来源链接
+
+**优化内容**：
+
+在 System Prompt 中添加引用来源的建议，鼓励模型在使用网页工具时提供参考链接。
+
+**修改内容**：
+
+1. **CHARLIE_BASE_IDENTITY** - 基础身份
+   - 添加："使用 web_search 或 fetch_web 获取信息时，建议附上来源链接方便用户查阅"
+
+2. **FINALIZE_SYSTEM_PROMPT** - 总结回复阶段
+   - 添加"引用来源建议"章节
+   - 提供格式参考示例
+   - 提示工具返回的 JSON 中包含可用的 URL
+
+**语气调整**：
+- 从"必须"改为"建议"
+- 简化说明，不过度强调
+- 给模型更多灵活性
+
+**相关文件**：
+- `generalAgent/graph/prompts.py` - 更新 system prompt 的引用建议
+
+### 2025-10-24 - CLI 显示工具调用详情
+
+**新增功能**：
+
+1. **工具调用可视化**
+   - 在 CLI 中显示 agent 的工具调用决策
+   - 格式：`🔧 [call] tool_name(arg1="value1", arg2=value2)`
+   - 智能参数格式化：长字符串截断、列表简化显示
+
+2. **改进工具结果显示**
+   - 工具调用前缀：`>> [call]`（输出方向）
+   - 工具结果前缀：`<< [result]`（返回方向）
+   - 使用箭头符号清晰显示数据流向
+
+**显示示例**：
+```
+You> 搜索 Python 最新教程
+>> [call] web_search(query="Python 最新教程", num_results=5)
+<< [result] {"query": "Python 最新教程", "results": [...]}
+Agent> 根据搜索结果，我找到了以下教程...
+```
+
+**技术细节**：
+- 参数格式化：字符串超过 40 字符自动截断
+- 列表超过 3 项显示为 `[N items]`
+- 总长度限制 80 字符，超出截断
+- 使用箭头符号清晰显示方向（>> 调用、<< 结果）
+
+**相关文件**：
+- `generalAgent/cli.py` - 添加 `_format_tool_args()` 方法和工具调用显示逻辑
+
+### 2025-10-24 - 优化工具 Docstring 和添加时间搜索提示
+
+**优化内容**：
+
+1. **精简工具 Docstring**
+   - `fetch_web`: 从 ~1500 字符精简到 410 字符（减少 73%）
+   - `web_search`: 从 ~2500 字符精简到 812 字符（减少 68%）
+   - 移除技术实现细节（API key、速率限制、错误处理等）
+   - 专注于"做什么、何时用、怎么用"
+   - 使用中文描述，更适合中文 LLM 理解
+
+2. **添加时间搜索提示**
+   - 在 `web_search` 的 query 参数说明中添加提示
+   - 建议在查询中加入时间词（如 "2025"、"最新"、"recent"）来获取特定时间范围的结果
+   - 虽然 API 不支持 date_range 参数，但通过查询词优化可达到类似效果
+
+**相关文件**：
+- `generalAgent/tools/builtin/jina_reader.py` - 精简 fetch_web docstring
+- `generalAgent/tools/builtin/jina_search.py` - 精简 web_search docstring 并添加时间提示
+
+### 2025-10-24 - System Prompt 添加当前日期时间
+
+**修改内容**：
+
+1. **新增 `get_current_datetime_tag()` 函数**
+   - 位置：`generalAgent/graph/prompts.py`
+   - 功能：生成 `<current_datetime>YYYY-MM-DD HH:MM:SS UTC</current_datetime>` 格式的时间标签
+   - 使用 UTC 时区确保一致性
+
+2. **所有 System Prompt 添加当前时间**
+   - 主 Agent（PLANNER_SYSTEM_PROMPT）- `planner.py:221`
+   - Subagent（SUBAGENT_SYSTEM_PROMPT）- `planner.py:217`
+   - Finalize 阶段（FINALIZE_SYSTEM_PROMPT）- `finalize.py:57`
+
+**格式示例**：
+```
+<current_datetime>2025-10-24 10:33:23 UTC</current_datetime>
+
+你是 Charlie，一个高效、友好的 AI 助手。
+...
+```
+
+**相关文件**：
+- `generalAgent/graph/prompts.py` - 新增 `get_current_datetime_tag()` 函数
+- `generalAgent/graph/nodes/planner.py` - 主 agent 和 subagent prompt 添加时间
+- `generalAgent/graph/nodes/finalize.py` - finalize prompt 添加时间
+
+### 2025-01-24 - 添加 Jina AI 网页抓取与搜索工具
+
+**新增功能**：
+
+1. **fetch_web 工具** - 基于 Jina Reader API
+   - 将任意网页转换为干净的 Markdown 格式
+   - 自动移除广告、导航栏等噪音内容
+   - 支持 CSS 选择器精准提取页面特定部分
+   - 支持长文档（最高 512K tokens）
+   - 支持 29 种语言
+   - 使用 Reader-LM 模型优化转换质量
+
+2. **web_search 工具** - 基于 Jina Search API
+   - 搜索网页并返回 LLM 优化的结果
+   - 每个搜索结果包含完整 Markdown 内容
+   - 支持域名白名单过滤（allowed_domains）
+   - 支持域名黑名单过滤（blocked_domains）
+   - 支持地理位置本地化搜索（location）
+   - 支持多语言搜索（language）
+   - 专为 RAG 和 LLM 处理优化
+
+**配置变更**：
+- 添加 `JINA_API_KEY` 环境变量（.env 和 .env.example）
+- 在 `tools.yaml` 的 core 分类中添加 `fetch_web` 和 `web_search`
+- 添加 `httpx>=0.27.0` 依赖到 `pyproject.toml`
+
+**文件清单**：
+- `generalAgent/tools/builtin/jina_reader.py` - fetch_web 工具实现
+- `generalAgent/tools/builtin/jina_search.py` - web_search 工具实现
+- `generalAgent/config/tools.yaml` - 工具配置更新
+- `.env.example`, `.env` - 添加 JINA_API_KEY
+- `pyproject.toml` - 添加 httpx 依赖
+- `README.md` - 工具文档更新
+
+**使用示例**：
+```python
+# 抓取网页内容（支持中文）
+fetch_web("https://docs.python.org/3/tutorial/")
+fetch_web("https://baike.baidu.com/item/Python")  # 中文网页
+
+# 搜索最新信息（自动检测语言）
+web_search("Python async programming 2025", num_results=5)
+web_search("人工智能最新进展", num_results=3)  # 中文查询
+
+# 仅搜索特定网站
+web_search("AI news", allowed_domains=["techcrunch.com", "theverge.com"])
+
+# 排除特定网站
+web_search("machine learning", blocked_domains=["wikipedia.org"])
+```
+
+**技术细节**：
+- 使用 Jina AI 官方 API（免费，无需额外付费）
+- 完整支持中文和多语言（29 种语言）
+- 自动检测查询语言，无需手动指定
+- Reader API 速率限制：200 RPM（标准）/ 2,000 RPM（高级）
+- Search API 速率限制：40 RPM（标准）/ 400 RPM（高级）
+- 请求超时设置：30 秒
+- 域名过滤在客户端实现（支持子域名匹配）
+- 使用 `ensure_ascii=False` 正确处理 Unicode 字符
 
