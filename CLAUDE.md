@@ -11,6 +11,108 @@ AgentGraph is a LangGraph-based agent framework with an **Agent Loop architectur
 - Multi-model routing (base, reasoning, vision, code, chat)
 - Session persistence with SQLite checkpointer
 
+## Project Structure (Post-Refactoring)
+
+The codebase is organized into shared infrastructure and agent-specific implementations:
+
+```
+project/
+├── shared/                     # Shared infrastructure (reusable across agents)
+│   ├── cli/
+│   │   └── base_cli.py        # Base CLI framework with command routing
+│   ├── session/
+│   │   ├── store.py           # Session persistence (SQLite)
+│   │   └── manager.py         # Session lifecycle management
+│   └── workspace/
+│       └── manager.py         # Workspace isolation & file management
+│
+├── generalAgent/              # General-purpose conversational agent
+│   ├── cli.py                # GeneralAgent CLI implementation
+│   ├── runtime/
+│   │   └── app.py            # Application assembly
+│   ├── graph/                # LangGraph nodes & routing
+│   ├── tools/                # Tool system
+│   ├── skills/               # Skill packages
+│   └── utils/                # Utilities
+│
+├── main.py                    # Entrypoint for GeneralAgent CLI
+└── main_old.py               # Backup of pre-refactor main.py
+```
+
+### Shared Infrastructure
+
+**Purpose**: Provide reusable components for building different agents (generalAgent, qaAgent, codeAgent, etc.)
+
+**Key Components**:
+
+1. **BaseCLI** (`shared/cli/base_cli.py`)
+   - Abstract base class for command-line interfaces
+   - Handles command routing (`/quit`, `/help`, `/sessions`, `/load`, `/reset`, `/current`)
+   - Main input/output loop
+   - Subclasses implement agent-specific logic
+
+2. **SessionManager** (`shared/session/manager.py`)
+   - Session lifecycle management
+   - Integrates SessionStore (persistence) + WorkspaceManager (file isolation)
+   - Methods: `create_session()`, `load_session()`, `reset_session()`, `save_current_session()`
+
+3. **SessionStore** (`shared/session/store.py`)
+   - SQLite-based session persistence
+   - Stores conversation history and state
+
+4. **WorkspaceManager** (`shared/workspace/manager.py`)
+   - Per-session isolated file workspaces
+   - Automatic skill loading with dependency installation
+   - Directory structure: `skills/`, `uploads/`, `outputs/`, `temp/`
+
+### Agent-Specific Implementation
+
+**GeneralAgent** is implemented by:
+
+1. **GeneralAgentCLI** (`generalAgent/cli.py`)
+   - Extends `BaseCLI` with GeneralAgent-specific logic
+   - Handles @mention parsing and skill loading
+   - Processes file uploads
+   - Streams LangGraph execution
+   - Auto-saves sessions after each turn
+
+2. **main.py**
+   - Entrypoint (~60 lines, down from 477!)
+   - Assembles application and shared infrastructure
+   - Launches CLI
+
+### Adding New Agents
+
+To add a new agent (e.g., `qaAgent`):
+
+1. Create agent directory: `qaAgent/`
+2. Implement CLI: `qaAgent/cli.py` (extends `BaseCLI`)
+3. Implement agent logic: `qaAgent/workflow.py` or `qaAgent/graph/`
+4. Create entrypoint: `qa_main.py`
+
+Example:
+
+```python
+# qa_main.py
+from shared.cli.base_cli import BaseCLI
+from shared.session.manager import SessionManager
+from qaAgent.workflow import build_qa_workflow
+
+class QAAgentCLI(BaseCLI):
+    async def handle_user_message(self, user_input: str):
+        # QA-specific logic here
+        result = await self.workflow.process_question(user_input)
+        print(f"A> {result}")
+
+async def main():
+    app, initial_state_factory = build_qa_workflow()
+
+    # Reuse shared infrastructure!
+    session_manager = SessionManager(...)
+    cli = QAAgentCLI(...)
+    await cli.run()
+```
+
 ## Development Commands
 
 ### Environment Setup
@@ -26,8 +128,14 @@ cp .env.example .env
 
 ### Running the Application
 ```bash
-# Start the interactive CLI
+# Method 1: Run from project root (recommended)
 python main.py
+# Or: uv run python main.py
+
+# Method 2: Run GeneralAgent directly (works from any directory)
+python generalAgent/main.py
+# Or from generalAgent directory:
+cd generalAgent && python main.py
 
 # CLI commands within the session:
 #   /quit, /exit     - Exit the program
@@ -37,6 +145,8 @@ python main.py
 #   /current         - Show current session info
 #   /clean           - Clean up old workspace files (>7 days)
 ```
+
+**Note**: The codebase now uses **project-root-aware path resolution**, so you can run from any directory. All paths (tools, skills, config, logs, data) are automatically resolved relative to the project root.
 
 ### Testing
 ```bash
@@ -91,7 +201,7 @@ START → agent ⇄ tools → agent → finalize → END
 - Structure: `skills/{skill_id}/SKILL.md` + `scripts/` + reference docs
 - When user mentions `@pdf`, skills are symlinked to session workspace
 - Agent uses `read_file` tool to read SKILL.md and follow guidance
-- Agent can use `run_skill_script` tool to execute skill scripts
+- Agent can use `run_bash_command` tool to execute skill scripts
 - Skills do NOT have `allowed_tools` field
 
 **@Mention System** (generalAgent/utils/mention_classifier.py)
@@ -111,8 +221,7 @@ START → agent ⇄ tools → agent → finalize → END
 - `generalAgent/persistence/session_store.py` - SQLite session persistence
 - `generalAgent/persistence/workspace.py` - Workspace manager for session isolation
 - `generalAgent/tools/builtin/file_ops.py` - File operation tools (read_file, write_file, list_workspace_files)
-- `generalAgent/tools/builtin/run_skill_script.py` - Execute skill scripts
-- `generalAgent/tools/builtin/run_bash_command.py` - Execute bash commands
+- `generalAgent/tools/builtin/run_bash_command.py` - Execute bash commands and skill scripts
 - `main.py` - CLI entrypoint with streaming, @mention parsing, session/workspace management
 
 ## Workspace Isolation
@@ -139,7 +248,7 @@ data/workspace/{session_id}/
 1. **Session Start** - Workspace created at `data/workspace/{thread_id}/`
 2. **@skill Mention** - Skills symlinked to `workspace/skills/`
 3. **File Operations** - Agent uses `read_file`, `write_file` tools
-4. **Script Execution** - Agent uses `run_skill_script` to execute Python scripts
+4. **Script Execution** - Agent uses `run_bash_command` to execute Python scripts
 5. **Cleanup** - Old workspaces (7+ days) automatically deleted
 
 ### Security
@@ -170,13 +279,13 @@ list_workspace_files(".")         # List all
 list_workspace_files("uploads")   # List specific directory
 ```
 
-**run_skill_script** (disabled by default, requires @mention)
-```python
-run_skill_script(
-    skill_id="pdf",
-    script_name="fill_fillable_fields.py",
-    args='{"input_pdf": "uploads/form.pdf", "output_pdf": "outputs/filled.pdf"}'
-)
+**run_bash_command** (disabled by default, requires @mention)
+```bash
+# Execute Python scripts from skills
+run_bash_command("python skills/pdf/scripts/fill_fillable_fields.py uploads/form.pdf outputs/filled.pdf")
+
+# Or with complex commands
+run_bash_command("python skills/pdf/scripts/extract_form_field_info.py uploads/form.pdf outputs/fields.json")
 ```
 
 ## Tool Configuration
@@ -266,7 +375,7 @@ System> [检测到 @pdf]
         [已加载技能: pdf]
 Agent> [Uses read_file to read skills/pdf/SKILL.md]
        [Follows instructions from SKILL.md]
-       [Uses run_skill_script to execute fill_fillable_fields.py]
+       [Uses run_bash_command to execute: python skills/pdf/scripts/fill_fillable_fields.py ...]
 ```
 
 ### Dependency Installation Details
@@ -346,6 +455,48 @@ LANGSMITH_API_KEY=your-key
 - Use `/sessions` to list, `/load <id>` to restore
 
 **Logging** - Logs written to `logs/` directory with timestamps
+
+## Refactoring History (2025-10-24)
+
+### Main.py Refactoring: Shared Infrastructure Extraction
+
+**Motivation**: The original `main.py` (477 lines) contained too much business logic, making it difficult to:
+- Add new agents (e.g., qaAgent, codeAgent)
+- Maintain consistent session/workspace management
+- Reuse CLI infrastructure across different agent types
+
+**Changes**:
+
+1. **Created `shared/` directory** for reusable infrastructure:
+   - `shared/cli/base_cli.py` - Abstract CLI framework (command routing, main loop)
+   - `shared/session/manager.py` - Session lifecycle management
+   - `shared/session/store.py` - Moved from `generalAgent/persistence/`
+   - `shared/workspace/manager.py` - Moved from `generalAgent/persistence/`
+
+2. **Created `generalAgent/cli.py`**:
+   - Extends `BaseCLI` with GeneralAgent-specific logic
+   - Handles @mention parsing, file uploads, LangGraph streaming
+   - ~300 lines of focused agent logic
+
+3. **New `main.py`** (~60 lines):
+   - Simple entrypoint that assembles components
+   - Initializes shared infrastructure
+   - Launches GeneralAgentCLI
+
+4. **Updated `build_application()`**:
+   - Now returns `(app, initial_state_factory, skill_registry, tool_registry)`
+   - Provides registries for mention classification
+
+**Benefits**:
+- ✅ Easy to add new agents (just extend `BaseCLI` and create entrypoint)
+- ✅ Shared session/workspace logic across all agents
+- ✅ Clear separation: infrastructure (shared) vs business logic (agent-specific)
+- ✅ 87% reduction in main.py complexity (477 → 60 lines)
+
+**Migration Notes**:
+- Old `main.py` backed up as `main_old.py`
+- All functionality preserved (tested with `/help`, `/sessions`, `/load`, etc.)
+- No changes to LangGraph, tools, skills, or core agent logic
 
 ## Recent Fixes (2025-10-24)
 

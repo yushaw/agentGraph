@@ -95,7 +95,7 @@ data/workspace/{session_id}/
 - `read_file` - Read files from workspace (skills/, uploads/, outputs/)
 - `write_file` - Write files to workspace (outputs/, temp/)
 - `list_workspace_files` - List workspace directory contents
-- `run_skill_script` - Execute Python scripts from skills (optional, disabled by default)
+- `run_bash_command` - Execute bash commands and Python scripts (optional, disabled by default)
 
 **Security features**:
 - Path traversal protection (cannot access files outside workspace)
@@ -146,8 +146,7 @@ Optional tools (can be enabled via tools.yaml):
 - `http_fetch` - HTTP requests (stub)
 - `extract_links` - Link extraction (stub)
 - `ask_vision` - Vision perception (stub)
-- `run_skill_script` - Execute Python scripts (disabled by default)
-- `run_bash_command` - Execute bash commands (disabled by default)
+- `run_bash_command` - Execute bash commands and Python scripts (disabled by default)
 
 **Tool Development**:
 - Tools are automatically discovered by scanning `generalAgent/tools/builtin/`
@@ -187,3 +186,45 @@ Routing helpers in `generalAgent.graph.routing` decide whether to decompose and 
 - 安装 Python 3.12，并执行 `uv sync`（或 `pip install -e .`）以拉取依赖（含 `langchain-openai`、`python-dotenv`）。
 - 运行 `python main.py` 进入多轮 CLI，会基于 `.env` 中的模型配置初始化对话；也可在自己的脚本中调用 `build_application()` 后驱动 `app.invoke(state)`。
 - 根据业务补充技能包与工具风险标签，增加测试覆盖治理与路由。
+
+---
+
+## 更新日志
+
+### 2025-01-24 - 消息历史管理与 Subagent 优化
+
+**问题背景**：
+- 消息历史在复杂任务中快速堆积（如读取长 SKILL.md 后继续多轮调试）
+- 默认保留 20 条消息导致重要上下文被截断
+- Agent 倾向于直接处理复杂任务，导致主上下文污染
+
+**修改内容**：
+
+1. **增加消息历史保留数量**
+   - 新增配置项 `MAX_MESSAGE_HISTORY`（默认 40，范围 10-100）
+   - 修改文件：`settings.py`, `planner.py`, `finalize.py`, `builder.py`, `runtime/app.py`
+   - 配置方式：`.env` 中设置 `MAX_MESSAGE_HISTORY=60`
+
+2. **优化 Prompt 引导使用 Subagent**
+   - 修改 `prompts.py` 的 PLANNER_SYSTEM_PROMPT：
+     - 明确标注"任务委派（推荐优先使用）"
+     - 说明何时应该用 subagent（读长文档、多轮调试、独立子任务）
+     - 强调 subagent 的好处（独立上下文、不污染主 agent）
+   - 修正错误示例：`call_subagent` 只有 `task` 和 `max_loops` 参数，没有 `allowed_tools`
+
+3. **其他优化**
+   - 添加 LOG_PROMPT_MAX_LENGTH 配置（默认 500 字符）
+   - 启用 planner 和 finalize 的 prompt 日志输出
+
+**预期效果**：
+- 主 agent 消息历史增加 1 倍（20→40），减少重要上下文丢失
+- 模型被引导优先使用 subagent 处理复杂任务，主 agent 只做协调
+- 典型场景：PDF 转图片任务从主 agent 17+ 条消息变为 3 条（委派+接收结果）
+
+**相关文件**：
+- `generalAgent/config/settings.py` - 新增 max_message_history 配置
+- `generalAgent/graph/prompts.py` - 优化 subagent 使用引导
+- `generalAgent/graph/nodes/planner.py` - 使用配置的消息历史长度
+- `generalAgent/graph/nodes/finalize.py` - 同上
+- `.env.example` - 添加配置说明
+

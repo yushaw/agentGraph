@@ -26,7 +26,10 @@ def build_finalize_node(
     *,
     model_registry: ModelRegistry,
     model_resolver: ModelResolver,
+    settings,
 ):
+    max_message_history = settings.governance.max_message_history
+
     @with_error_boundary("finalize")
     async def finalize_node(state: AppState) -> AppState:
         log_node_entry(LOGGER, "finalize", state)
@@ -44,13 +47,13 @@ def build_finalize_node(
 
         LOGGER.info(f"Generating final response (last tool: {history[-1].name})...")
 
-        # Clean and safely truncate message history (keep last 20 messages - token optimization)
+        # Clean and safely truncate message history (configurable via MAX_MESSAGE_HISTORY)
         cleaned_history = clean_message_history(history)
-        recent_history = truncate_messages_safely(cleaned_history, keep_recent=20)
+        recent_history = truncate_messages_safely(cleaned_history, keep_recent=max_message_history)
         LOGGER.info(f"  - Message history: {len(history)} → {len(cleaned_history)} (cleaned) → {len(recent_history)} (kept)")
 
-        # Log the finalize prompt
-        log_prompt(LOGGER, "finalize", FINALIZE_SYSTEM_PROMPT)
+        # Log the finalize prompt with truncation
+        log_prompt(LOGGER, "finalize", FINALIZE_SYSTEM_PROMPT, max_length=500)
 
         prompt_messages = [
             SystemMessage(content=FINALIZE_SYSTEM_PROMPT),

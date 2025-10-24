@@ -87,6 +87,7 @@ class GovernanceSettings(BaseModel):
 
     auto_approve_writes: bool = Field(default=False, alias="AUTO_APPROVE_WRITES")
     max_loops: int = Field(default=100, ge=1, le=500)
+    max_message_history: int = Field(default=40, ge=10, le=100, alias="MAX_MESSAGE_HISTORY")
 
 
 class ObservabilitySettings(BaseModel):
@@ -98,6 +99,9 @@ class ObservabilitySettings(BaseModel):
     )
     langsmith_endpoint: Optional[str] = Field(default=None, alias="LANGCHAIN_ENDPOINT")
     tracing_enabled: bool = Field(default=False, alias="LANGCHAIN_TRACING_V2")
+
+    # Logging settings
+    log_prompt_max_length: int = Field(default=500, ge=100, le=5000, alias="LOG_PROMPT_MAX_LENGTH")
 
     # Session persistence database path
     # Default: ./data/sessions.db (SQLite)

@@ -34,17 +34,35 @@ PLANNER_SYSTEM_PROMPT = f"""{CHARLIE_BASE_IDENTITY}
 - 需要创建新文件或完全重写 → 用 write_file
 
 ### 技能系统（Skills）
-Skills 是知识包（文档+脚本），**不是工具**。
+Skills 是知识包（文档），**不是工具**。
 
-使用流程：
+**推荐使用方式**（避免长文档污染上下文）：
 1. 用户提到 @skill 或上传特定类型文件时
-2. 用 read_file 读取 `skills/{{skill_id}}/SKILL.md` 获取指导
-3. 根据文档说明执行操作（可能涉及读取其他文档、运行脚本等）
+2. **优先用 call_subagent 委派任务**，让 subagent 读取 SKILL.md 并执行
+   - 示例：`call_subagent(task="使用 @pdf 技能将 uploads/1.pdf 转为图片，保存到 outputs/pdf_images/")`
+3. 仅在简单查询时才直接使用 read_file 读取 `skills/{{skill_id}}/SKILL.md` 获取指导
 
-### 任务委派
+**何时委派 subagent**：
+- 需要完整执行 skill 指导的任务（如"填写 PDF 表单"）
+- 涉及多步骤操作
+
+### 任务委派（推荐优先使用）
 - **call_subagent**: 将独立子任务委派给专用 agent 执行
-  - 适用于：需要独立上下文的子任务
-  - 子 agent 会使用你指定的工具完成任务后返回结果
+  - **优先使用场景**（避免主 agent 上下文堆积）：
+    - 需要多轮尝试的复杂操作（如调试脚本、处理文件）
+    - 独立的子目标（如"分析 PDF 内容"、"转换文件格式"）
+  - **好处**：
+    - 子 agent 有独立上下文，避免主 agent 消息历史过长
+    - 任务失败时不污染主 agent 历史
+    - 并行执行多个独立任务
+  - **使用方法**：
+    ```python
+    # 基本用法
+    call_subagent(task="将 uploads/1.pdf 转换为图片，保存到 outputs/")
+
+    # 复杂任务可增加循环次数
+    call_subagent(task="调试并修复 temp/script.py 中的错误", max_loops=20)
+    ```
 
 ### 任务追踪
 - **todo_write/todo_read**: 追踪多步骤任务（3+ 步骤）
@@ -80,6 +98,10 @@ SUBAGENT_SYSTEM_PROMPT = """你是任务执行器（Subagent），负责完成�
 
 限制：
 - 不要询问用户（无法对话）
+
+技能系统（Skills）：
+- 使用 read_file 工具读取该技能的 `skills/{{skill_id}}/SKILL.md` 文件获取详细指导，根据指导执行相关操作
+- Skills 不是 tools，而是知识包（文档）
 """
 
 
@@ -114,19 +136,16 @@ def build_skills_catalog(skill_registry) -> str:
 
     lines = ["# 可用技能（Skills）"]
     lines.append("以下是可用的专业技能。当你需要使用某个技能时：")
-    lines.append("1. 使用 Read 工具读取该技能的 SKILL.md 文件获取详细指导")
-    lines.append("2. 根据指导执行相关操作（读取其他文档、运行脚本等）")
-    lines.append("3. Skills 不是 tools，而是知识包（文档+脚本）")
+    lines.append("1. 使用 read_file 工具读取该技能的 SKILL.md 文件获取详细指导")
+    lines.append("2. 根据指导执行相关操作")
+    lines.append("3. Skills 不是 tools，而是知识包（文档）")
     lines.append("")
 
     for skill in skills:
-        full_meta = skill_registry.get(skill.id)
-        skill_path = full_meta.path if full_meta else None
-
         lines.append(f"## {skill.name} (#{skill.id})")
         lines.append(f"{skill.description}")
-        if skill_path:
-            lines.append(f"📁 路径: `{skill_path}/SKILL.md`")
+        # Use workspace-relative path (skills are symlinked to workspace/skills/)
+        lines.append(f"📁 路径: `skills/{skill.id}/SKILL.md`")
         lines.append("")
 
     return "\n".join(lines)
@@ -177,10 +196,11 @@ def build_dynamic_reminder(
         agents_str = "、".join(mentioned_agents)
         reminders.append(f"<system_reminder>用户提到了代理：{agents_str}。你可以使用 call_subagent 工具将任务委派给子代理执行。</system_reminder>")
 
-    if has_images:
-        reminders.append("<system_reminder>用户分享了图片。使用 vision 能力理解图片内容。</system_reminder>")
+    # if has_images:
+    #     reminders.append("<system_reminder>用户分享了图片。使用 vision 能力理解图片内容。</system_reminder>")
 
-    if has_code:
-        reminders.append("<system_reminder>用户输入包含代码。使用代码分析能力处理。</system_reminder>")
+    # DISABLED: Code detection is too broad and not reliable
+    # if has_code:
+    #     reminders.append("<system_reminder>用户输入包含代码。使用代码分析能力处理。</system_reminder>")
 
     return "\n\n".join(reminders) if reminders else ""

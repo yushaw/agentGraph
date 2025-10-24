@@ -43,13 +43,6 @@ core:
     tags: ["file", "edit", "write"]
     description: "Edit files with precise string replacement (safer than write_file)"
 
-  run_skill_script:
-    enabled: false
-    always_available: false
-    category: "execution"
-    tags: ["execute", "script", "skill"]
-    description: "Execute Python scripts from skills (requires explicit @mention)"
-
   run_bash_command:
     enabled: false
     always_available: false

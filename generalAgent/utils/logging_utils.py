@@ -157,18 +157,30 @@ def log_agent_response(logger: logging.Logger, content: str) -> None:
     logger.info(f"Agent response: {content[:100]}{'...' if len(content) > 100 else ''}")
 
 
-def log_prompt(logger: logging.Logger, phase: str, prompt: str) -> None:
-    """Log system prompt being used.
+def log_prompt(logger: logging.Logger, phase: str, prompt: str, max_length: int = 500) -> None:
+    """Log system prompt being used (with truncation).
 
     Args:
         logger: Logger instance
         phase: Phase name (planner/step_executor/finalize)
         prompt: System prompt content
+        max_length: Maximum characters to show (default: 500)
     """
     logger.info(f"\n{'='*80}")
     logger.info(f"System Prompt for {phase}:")
     logger.info(f"{'='*80}")
-    logger.info(prompt)
+
+    # Truncate prompt if too long
+    if len(prompt) > max_length:
+        truncated = prompt[:max_length]
+        # Try to truncate at last newline for cleaner display
+        last_newline = truncated.rfind('\n')
+        if last_newline > max_length * 0.8:  # If newline is in last 20%
+            truncated = truncated[:last_newline]
+        logger.info(f"{truncated}\n... (truncated, total {len(prompt)} chars)")
+    else:
+        logger.info(prompt)
+
     logger.info(f"{'='*80}\n")
 
 

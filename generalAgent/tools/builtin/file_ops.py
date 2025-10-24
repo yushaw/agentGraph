@@ -40,12 +40,13 @@ def read_file(
         workspace_root = os.environ.get("AGENT_WORKSPACE_PATH")
 
         if not workspace_root:
-            # Fallback: try to read from project skills/ (for backward compatibility)
-            project_root = Path.cwd()
+            # Fallback: try to read from project generalAgent/skills/ (for backward compatibility)
+            from generalAgent.config.project_root import get_project_root
+            project_root = get_project_root()
             target_path = (project_root / path).resolve()
 
-            # Check if trying to read from skills/
-            skills_dir = project_root / "skills"
+            # Check if trying to read from generalAgent/skills/
+            skills_dir = project_root / "generalAgent" / "skills"
             if target_path.is_relative_to(skills_dir):
                 if not target_path.exists():
                     return f"Error: File not found: {path}"

@@ -9,6 +9,7 @@ from typing import Callable, Dict, List, Optional
 from generalAgent import graph
 from generalAgent.agents import ModelResolver
 from generalAgent.config import get_settings
+from generalAgent.config.project_root import resolve_project_path
 from generalAgent.models import build_default_registry
 from generalAgent.persistence import build_checkpointer
 from generalAgent.skills import SkillRegistry
@@ -114,7 +115,7 @@ def build_application(
 
     model_registry = build_default_registry(model_ids)
 
-    skills_root = skills_root or Path("generalAgent/skills")
+    skills_root = skills_root or resolve_project_path("generalAgent/skills")
     skill_registry = _create_skill_registry(skills_root)
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)
@@ -135,6 +136,7 @@ def build_application(
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
         skill_registry=skill_registry,
+        settings=settings,
         checkpointer=checkpointer,
     )
 
@@ -161,4 +163,4 @@ def build_application(
             "workspace_path": None,  # Set by main.py when session starts
         }
 
-    return app, initial_state, skill_registry
+    return app, initial_state, skill_registry, tool_registry

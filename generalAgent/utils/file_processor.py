@@ -228,11 +228,11 @@ def process_file(
         )
 
 
-def build_file_upload_reminder(processed_files: List[ProcessedFile]) -> str:
+def build_file_upload_reminder(processed_files: List[ProcessedFile | dict]) -> str:
     """Build system_reminder message for uploaded files.
 
     Args:
-        processed_files: List of successfully processed files
+        processed_files: List of successfully processed files (ProcessedFile objects or dicts)
 
     Returns:
         Formatted system_reminder XML string
@@ -240,11 +240,15 @@ def build_file_upload_reminder(processed_files: List[ProcessedFile]) -> str:
     if not processed_files:
         return ""
 
+    # Helper to get attribute from ProcessedFile or dict
+    def get_attr(f, key):
+        return f.get(key) if isinstance(f, dict) else getattr(f, key)
+
     # Separate by type
-    images = [f for f in processed_files if f.file_type == "image" and not f.error]
-    documents = [f for f in processed_files if f.file_type in ("pdf", "office") and not f.error]
-    texts = [f for f in processed_files if f.file_type in ("text", "code") and not f.error]
-    others = [f for f in processed_files if f.file_type == "unknown" and not f.error]
+    images = [f for f in processed_files if get_attr(f, "file_type") == "image" and not get_attr(f, "error")]
+    documents = [f for f in processed_files if get_attr(f, "file_type") in ("pdf", "office") and not get_attr(f, "error")]
+    texts = [f for f in processed_files if get_attr(f, "file_type") in ("text", "code") and not get_attr(f, "error")]
+    others = [f for f in processed_files if get_attr(f, "file_type") == "unknown" and not get_attr(f, "error")]
 
     lines = []
 
@@ -259,28 +263,28 @@ def build_file_upload_reminder(processed_files: List[ProcessedFile]) -> str:
     file_num = 1
     for file in images:
         lines.append(
-            f"{file_num}. {file.filename} (图片, {file.size_formatted}) → {file.workspace_path} [已加载到 vision]"
+            f"{file_num}. {get_attr(file, 'filename')} (图片, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')} [已加载到 vision]"
         )
         file_num += 1
 
     for file in documents:
         skill_hint = ""
-        if file.file_type == "pdf":
+        if get_attr(file, "file_type") == "pdf":
             skill_hint = " [可用 @pdf 处理]"
         lines.append(
-            f"{file_num}. {file.filename} ({file.file_type.upper()}, {file.size_formatted}) → {file.workspace_path}{skill_hint}"
+            f"{file_num}. {get_attr(file, 'filename')} ({get_attr(file, 'file_type').upper()}, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')}{skill_hint}"
         )
         file_num += 1
 
     for file in texts:
         lines.append(
-            f"{file_num}. {file.filename} (文本, {file.size_formatted}) → {file.workspace_path} [可用 read_file 读取]"
+            f"{file_num}. {get_attr(file, 'filename')} (文本, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')} [可用 read_file 读取]"
         )
         file_num += 1
 
     for file in others:
         lines.append(
-            f"{file_num}. {file.filename} (文件, {file.size_formatted}) → {file.workspace_path}"
+            f"{file_num}. {get_attr(file, 'filename')} (文件, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')}"
         )
         file_num += 1
 

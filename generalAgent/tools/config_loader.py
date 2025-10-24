@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Set
 import yaml
 
 from .registry import ToolMeta
+from generalAgent.config.project_root import resolve_project_path
 
 LOGGER = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ class ToolConfig:
         """
         dirs = self.config.get("directories", {})
         builtin = dirs.get("builtin", "generalAgent/tools/builtin")
-        return Path(builtin)
+        return resolve_project_path(builtin)
 
     def get_custom_directory(self) -> Path:
         """Get path to custom tools directory.
@@ -135,7 +136,7 @@ class ToolConfig:
         """
         dirs = self.config.get("directories", {})
         custom = dirs.get("custom", "generalAgent/tools/custom")
-        return Path(custom)
+        return resolve_project_path(custom)
 
     def get_scan_directories(self) -> List[Path]:
         """Get list of directories to scan for tools.
@@ -227,6 +228,6 @@ def load_tool_config(config_path: Path | None = None) -> ToolConfig:
         ToolConfig instance
     """
     if config_path is None:
-        config_path = Path("generalAgent/config/tools.yaml")
+        config_path = resolve_project_path("generalAgent/config/tools.yaml")
 
     return ToolConfig(config_path)

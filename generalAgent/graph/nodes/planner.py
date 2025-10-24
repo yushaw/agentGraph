@@ -48,9 +48,10 @@ def _detect_multimodal_input(messages: List[BaseMessage]) -> tuple[bool, bool]:
                         has_images = True
 
         # Check for code blocks (markdown code fence)
-        if isinstance(content, str):
-            if "```" in content:
-                has_code = True
+        # DISABLED: Too broad - matches any content with ``` including error messages
+        # if isinstance(content, str):
+        #     if "```" in content:
+        #         has_code = True
 
     return has_images, has_code
 
@@ -62,10 +63,12 @@ def build_planner_node(
     tool_registry: ToolRegistry,
     persistent_global_tools: Iterable[BaseTool],
     skill_registry,
+    settings,
 ):
     """Create a planner node bound to runtime registries."""
 
     persistent_global_tools = list(persistent_global_tools)
+    max_message_history = settings.governance.max_message_history
 
     @with_error_boundary("planner")
     async def planner_node(state: AppState) -> AppState:
@@ -73,55 +76,39 @@ def build_planner_node(
 
         # ========== Assemble visible tools ==========
         visible_tools: List[BaseTool] = list(persistent_global_tools)
-        LOGGER.info("Building visible tools...")
-        LOGGER.info(f"  - Starting with {len(persistent_global_tools)} persistent global tools")
 
         # Process @mentions (tools, skills, agents)
         mentioned = state.get("mentioned_agents", [])
         grouped_mentions = {"tools": [], "skills": [], "agents": [], "unknown": []}
 
         if mentioned:
-            LOGGER.info(f"  - Processing @mentions: {mentioned}")
-
             # Classify mentions by type
             classifications = classify_mentions(mentioned, tool_registry, skill_registry)
             grouped_mentions = group_by_type(classifications)
 
-            LOGGER.info(f"    - Tools: {grouped_mentions['tools']}")
-            LOGGER.info(f"    - Skills: {grouped_mentions['skills']}")
-            LOGGER.info(f"    - Agents: {grouped_mentions['agents']}")
             if grouped_mentions['unknown']:
-                LOGGER.warning(f"    - Unknown: {grouped_mentions['unknown']}")
+                LOGGER.warning(f"Unknown @mentions: {grouped_mentions['unknown']}")
 
             # Handle @tool mentions (load and add to visible_tools)
             for tool_name in grouped_mentions['tools']:
                 try:
                     tool = tool_registry.get_tool(tool_name)
                     visible_tools.append(tool)
-                    LOGGER.info(f"    ✓ @{tool_name} → tool (already loaded)")
                 except KeyError:
                     try:
                         tool = tool_registry.load_on_demand(tool_name)
                         visible_tools.append(tool)
-                        LOGGER.info(f"    ✓ @{tool_name} → tool (loaded on-demand)")
                     except KeyError:
-                        LOGGER.error(f"    ✗ @{tool_name} classification error")
+                        LOGGER.error(f"@{tool_name} load failed")
 
             # Handle @agent mentions (ensure call_subagent is available)
             if grouped_mentions['agents']:
-                LOGGER.info(f"    📢 @agent mentioned, ensuring call_subagent is available")
                 try:
                     subagent_tool = tool_registry.get_tool("call_subagent")
                     if subagent_tool not in visible_tools:
                         visible_tools.append(subagent_tool)
-                        LOGGER.info(f"    ✓ Added call_subagent for @agent mentions")
                 except KeyError:
-                    LOGGER.warning(f"    ✗ call_subagent not found in registry")
-
-            # Handle @skill mentions (will be passed to prompt via reminder)
-            # Skills are handled in build_dynamic_reminder(), no action needed here
-            if grouped_mentions['skills']:
-                LOGGER.info(f"    📚 @skill mentions will be handled via system reminder")
+                    LOGGER.warning("call_subagent not found")
 
         # Deduplicate
         deduped: List[BaseTool] = []
@@ -132,7 +119,6 @@ def build_planner_node(
             seen.add(tool.name)
             deduped.append(tool)
         visible_tools = deduped
-        LOGGER.info(f"  - Final tool count after deduplication: {len(visible_tools)}")
 
         # ========== Subagent tool filtering ==========
         # Subagents should NOT have access to call_subagent (prevent nesting)
@@ -142,13 +128,10 @@ def build_planner_node(
         if is_subagent:
             # Remove call_subagent from visible tools
             visible_tools = [t for t in visible_tools if t.name != "call_subagent"]
-            LOGGER.info(f"  - Subagent context detected, removed 'call_subagent' tool")
-            LOGGER.info(f"  - Subagent tool count: {len(visible_tools)}")
 
         # ========== Detect capabilities needed ==========
         need_code = False
         need_vision = False
-        LOGGER.info("Detecting capability requirements from tools...")
         for tool in visible_tools:
             metadata = tool_registry.get_meta_optional(tool.name)
             if metadata:
@@ -156,18 +139,15 @@ def build_planner_node(
                     need_code = True
                 if "vision" in metadata.tags:
                     need_vision = True
-        LOGGER.info(f"  - need_code: {need_code}, need_vision: {need_vision}")
 
         # ========== Detect multimodal input ==========
         history: List[BaseMessage] = list(state.get("messages") or [])
         has_images, has_code = _detect_multimodal_input(history)
-        LOGGER.info(f"Multimodal input detected: has_images={has_images}, has_code={has_code}")
 
         # Override model preference if images detected
         preference = state.get("model_pref")
         if has_images and not preference:
             preference = "vision"
-            LOGGER.info(f"  - Model preference set to 'vision' due to image input")
 
         # ========== Build dynamic system prompt ==========
         active_skill = state.get("active_skill")
@@ -182,10 +162,9 @@ def build_planner_node(
             has_code=has_code,
         )
 
-        # Clean and safely truncate message history (keep last 20 for planner - token optimization)
+        # Clean and safely truncate message history (configurable via MAX_MESSAGE_HISTORY)
         cleaned_history = clean_message_history(history)
-        recent_history = truncate_messages_safely(cleaned_history, keep_recent=20)
-        LOGGER.info(f"  - Message history: {len(history)} → {len(cleaned_history)} (cleaned) → {len(recent_history)} (kept)")
+        recent_history = truncate_messages_safely(cleaned_history, keep_recent=max_message_history)
 
         # Add todo reminder if there are todos
         todos = state.get("todos", [])
@@ -251,16 +230,14 @@ def build_planner_node(
                 base_prompt = f"{base_prompt}\n\n{chr(10).join(reminders)}"
                 LOGGER.info(f"  - Reminders added: {len(reminders)} reminder(s)")
 
-        # Log the full system prompt
-        log_prompt(LOGGER, "planner", base_prompt)
-
-        # Log visible tools
+        # Log prompt with truncation for readability
+        log_prompt(LOGGER, "planner", base_prompt, max_length=500)
         log_visible_tools(LOGGER, "planner", visible_tools)
 
         prompt_messages = [SystemMessage(content=base_prompt), *recent_history]
 
         # ========== Invoke planner ==========
-        LOGGER.info(f"Invoking planner (need_code={need_code or has_code}, need_vision={has_images}, preference={preference})...")
+        # Invoke planner with model selection
 
         try:
             output = await invoke_planner(

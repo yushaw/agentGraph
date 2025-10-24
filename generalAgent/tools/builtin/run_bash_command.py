@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from typing import Annotated
 
@@ -47,10 +48,27 @@ def run_bash_command(
 
         LOGGER.info(f"Executing bash command: {command}")
 
+        # Build environment with inherited PATH for system tools
+        # Use parent process PATH to access homebrew, system tools, etc.
+        parent_path = os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+
+        env = {
+            "PATH": parent_path,  # Inherit system PATH
+            "HOME": str(workspace_path),  # HOME points to workspace
+            "AGENT_WORKSPACE_PATH": str(workspace_path),
+        }
+
+        # If running in a virtual environment, prepend venv bin to PATH
+        if hasattr(sys, 'prefix') and sys.prefix != sys.base_prefix:
+            venv_bin = Path(sys.prefix) / "bin"
+            env["PATH"] = f"{venv_bin}:{env['PATH']}"
+            env["VIRTUAL_ENV"] = sys.prefix
+
         # Execute in workspace
         result = subprocess.run(
             command,
             cwd=workspace_path,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,

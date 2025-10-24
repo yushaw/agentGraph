@@ -28,6 +28,7 @@ def build_state_graph(
     tool_registry: ToolRegistry,
     persistent_global_tools: List,
     skill_registry,
+    settings,
     checkpointer=None,
 ):
     """Compose the agent graph with Agent Loop architecture (Claude Code style).
@@ -58,11 +59,13 @@ def build_state_graph(
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
         skill_registry=skill_registry,
+        settings=settings,
     )
 
     finalize_node = build_finalize_node(
         model_registry=model_registry,
         model_resolver=model_resolver,
+        settings=settings,
     )
 
     # ========== Build graph ==========
