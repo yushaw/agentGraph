@@ -143,9 +143,8 @@ async def build_application(
     configure_tracing(settings.observability)
 
     model_configs = resolve_model_configs(settings)
-    model_ids = {slot: cfg["id"] for slot, cfg in model_configs.items()}
 
-    model_registry = build_default_registry(model_ids)
+    model_registry = build_default_registry(model_configs)
 
     skills_root = skills_root or resolve_project_path("generalAgent/skills")
     skill_registry = _create_skill_registry(skills_root)

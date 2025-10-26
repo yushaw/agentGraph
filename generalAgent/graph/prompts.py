@@ -38,6 +38,10 @@ PLANNER_SYSTEM_PROMPT = f"""{CHARLIE_BASE_IDENTITY}
 
 ## 工具使用场景
 
+### 用户交互
+- **ask_human**: 缺少关键信息时询问用户（如：用户说"订酒店"但没说城市）
+  - 不要用于：能通过其他工具获取的信息、任务已明确时的重复确认
+
 ### 文件操作
 - **read_file**: 读取 workspace 内文件（skills/、uploads/、outputs/）
 - **write_file**: 创建新文件或完全覆盖现有文件

@@ -50,6 +50,10 @@ class ModelRoutingSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MODEL_BASE_URL", "MODEL_BASIC_BASE_URL"),
     )
+    base_context_window: int = Field(
+        default=128000,
+        validation_alias=AliasChoices("MODEL_BASE_CONTEXT_WINDOW", "MODEL_BASIC_CONTEXT_WINDOW"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -69,6 +73,10 @@ class ModelRoutingSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MODEL_REASON_URL", "MODEL_REASONING_BASE_URL"),
     )
+    reason_context_window: int = Field(
+        default=128000,
+        validation_alias=AliasChoices("MODEL_REASON_CONTEXT_WINDOW", "MODEL_REASONING_CONTEXT_WINDOW"),
+    )
 
     vision: str = Field(
         default="vision-omni",
@@ -81,6 +89,10 @@ class ModelRoutingSettings(BaseSettings):
     vision_base_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("MODEL_VISION_URL", "MODEL_MULTIMODAL_BASE_URL"),
+    )
+    vision_context_window: int = Field(
+        default=64000,
+        validation_alias=AliasChoices("MODEL_VISION_CONTEXT_WINDOW", "MODEL_MULTIMODAL_CONTEXT_WINDOW"),
     )
 
     code: str = Field(
@@ -95,6 +107,10 @@ class ModelRoutingSettings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MODEL_CODE_URL", "MODEL_CODE_BASE_URL"),
     )
+    code_context_window: int = Field(
+        default=200000,
+        validation_alias=AliasChoices("MODEL_CODE_CONTEXT_WINDOW"),
+    )
 
     chat: str = Field(
         default="chat-mid",
@@ -107,6 +123,10 @@ class ModelRoutingSettings(BaseSettings):
     chat_base_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("MODEL_CHAT_URL", "MODEL_CHAT_BASE_URL"),
+    )
+    chat_context_window: int = Field(
+        default=256000,
+        validation_alias=AliasChoices("MODEL_CHAT_CONTEXT_WINDOW"),
     )
 
 

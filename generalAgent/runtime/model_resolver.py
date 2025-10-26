@@ -26,6 +26,7 @@ class ModelConfig(TypedDict):
     id: str
     api_key: Optional[str]
     base_url: Optional[str]
+    context_window: int
 
 
 def _resolved_value(preferred: Optional[str], *env_names: str) -> Optional[str]:
@@ -73,26 +74,31 @@ def resolve_model_configs(settings: Settings) -> Dict[str, ModelConfig]:
             "id": _resolved_value(settings.models.base, "MODEL_BASIC_ID", "MODEL_BASE_ID", "MODEL_BASE") or "base-quick",
             "api_key": settings.models.base_api_key,
             "base_url": settings.models.base_base_url,
+            "context_window": settings.models.base_context_window,
         },
         "reason": {
             "id": _resolved_value(settings.models.reason, "MODEL_REASONING_ID", "MODEL_REASON_ID", "MODEL_REASON") or "reasoner-pro",
             "api_key": settings.models.reason_api_key,
             "base_url": settings.models.reason_base_url,
+            "context_window": settings.models.reason_context_window,
         },
         "vision": {
             "id": _resolved_value(settings.models.vision, "MODEL_MULTIMODAL_ID", "MODEL_VISION_ID", "MODEL_VISION") or "vision-omni",
             "api_key": settings.models.vision_api_key,
             "base_url": settings.models.vision_base_url,
+            "context_window": settings.models.vision_context_window,
         },
         "code": {
             "id": _resolved_value(settings.models.code, "MODEL_CODE_ID", "MODEL_CODE") or "code-pro",
             "api_key": settings.models.code_api_key,
             "base_url": settings.models.code_base_url,
+            "context_window": settings.models.code_context_window,
         },
         "chat": {
             "id": _resolved_value(settings.models.chat, "MODEL_CHAT_ID", "MODEL_CHAT") or "chat-mid",
             "api_key": settings.models.chat_api_key,
             "base_url": settings.models.chat_base_url,
+            "context_window": settings.models.chat_context_window,
         },
     }
 

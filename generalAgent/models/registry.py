@@ -19,6 +19,7 @@ class ModelSpec:
     domain: str  # general | reasoning | code | chat
     speed: str  # fast | normal | slow
     quality: str  # low | med | high
+    context_window: int  # Maximum context window size in tokens
 
 
 class ModelRegistry:
@@ -69,55 +70,65 @@ class ModelRegistry:
         return self.get("base")
 
 
-def build_default_registry(model_ids: Dict[str, str]) -> ModelRegistry:
-    """Instantiate the registry with defaults drawn from configuration."""
+def build_default_registry(model_configs: Dict[str, Dict[str, object]]) -> ModelRegistry:
+    """Instantiate the registry with defaults drawn from configuration.
+
+    Args:
+        model_configs: Dictionary mapping slot names to model configuration dicts.
+                      Each config dict must have 'id' and 'context_window' keys.
+    """
 
     registry = ModelRegistry(
         [
             ModelSpec(
                 key="base",
-                model_id=model_ids["base"],
+                model_id=str(model_configs["base"]["id"]),
                 can_tools=False,
                 multimodal=False,
                 domain="general",
                 speed="fast",
                 quality="low",
+                context_window=int(model_configs["base"]["context_window"]),
             ),
             ModelSpec(
                 key="reason",
-                model_id=model_ids["reason"],
+                model_id=str(model_configs["reason"]["id"]),
                 can_tools=True,
                 multimodal=False,
                 domain="reasoning",
                 speed="slow",
                 quality="high",
+                context_window=int(model_configs["reason"]["context_window"]),
             ),
             ModelSpec(
                 key="vision",
-                model_id=model_ids["vision"],
+                model_id=str(model_configs["vision"]["id"]),
                 can_tools=False,
                 multimodal=True,
                 domain="general",
                 speed="normal",
                 quality="med",
+                context_window=int(model_configs["vision"]["context_window"]),
             ),
             ModelSpec(
                 key="code",
-                model_id=model_ids["code"],
+                model_id=str(model_configs["code"]["id"]),
                 can_tools=True,
                 multimodal=False,
                 domain="code",
                 speed="normal",
                 quality="high",
+                context_window=int(model_configs["code"]["context_window"]),
             ),
             ModelSpec(
                 key="chat",
-                model_id=model_ids["chat"],
+                model_id=str(model_configs["chat"]["id"]),
                 can_tools=True,
                 multimodal=False,
                 domain="chat",
                 speed="normal",
                 quality="med",
+                context_window=int(model_configs["chat"]["context_window"]),
             ),
         ]
     )
