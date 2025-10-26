@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Iterable, List
 
-from langchain_core.messages import BaseMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from generalAgent.agents import ModelResolver, invoke_planner
@@ -69,12 +70,26 @@ def build_planner_node(
     tool_registry: ToolRegistry,
     persistent_global_tools: Iterable[BaseTool],
     skill_registry,
+    skill_config,
     settings,
 ):
     """Create a planner node bound to runtime registries."""
 
     persistent_global_tools = list(persistent_global_tools)
     max_message_history = settings.governance.max_message_history
+
+    # ========== Build static system prompt (with fixed datetime) ==========
+    # Generate datetime tag once at initialization (minute precision, never updates)
+    now = datetime.now(timezone.utc)
+    static_datetime_tag = f"<current_datetime>{now.strftime('%Y-%m-%d %H:%M UTC')}</current_datetime>"
+
+    # Build base system prompts (main agent and subagent)
+    # Datetime tag is placed at the bottom of system prompt for better KV cache reuse
+    # Only include enabled skills in catalog (controlled by skills.yaml)
+    static_main_prompt = f"{PLANNER_SYSTEM_PROMPT}\n\n{build_skills_catalog(skill_registry, skill_config)}\n\n{static_datetime_tag}"
+    static_subagent_prompt = f"{SUBAGENT_SYSTEM_PROMPT}\n\n{static_datetime_tag}"
+
+    LOGGER.info(f"Built static system prompts with datetime: {static_datetime_tag}")
 
     @with_error_boundary("planner")
     async def planner_node(state: AppState) -> AppState:
@@ -209,41 +224,53 @@ def build_planner_node(
         context_id = state.get("context_id", "main")
         is_subagent = context_id != "main" and context_id.startswith("subagent-")
 
-        # Get current datetime tag
-        datetime_tag = get_current_datetime_tag()
-
+        # Use static system prompt (datetime is already at the bottom)
         if is_subagent:
-            # Subagent: use task-focused prompt, no reminders
-            base_prompt = f"{datetime_tag}\n\n{SUBAGENT_SYSTEM_PROMPT}"
+            base_prompt = static_subagent_prompt
             LOGGER.info(f"  - Using SUBAGENT prompt for context: {context_id}")
+            # Subagents don't get reminders (keep them focused)
+            combined_reminders = ""
         else:
-            # Main agent: use conversational prompt with reminders
-            base_prompt = f"{datetime_tag}\n\n{PLANNER_SYSTEM_PROMPT}"
-
-            # Add skills catalog (model-invoked pattern)
-            skills_catalog = build_skills_catalog(skill_registry)
-            if skills_catalog:
-                base_prompt = f"{base_prompt}\n\n{skills_catalog}"
-                LOGGER.info(f"  - Skills catalog added ({len(skill_registry.list_meta())} skills)")
+            base_prompt = static_main_prompt
+            enabled_skills_count = len(skill_config.get_enabled_skills()) if skill_config else len(skill_registry.list_meta())
+            LOGGER.info(f"  - Using MAIN AGENT prompt with {enabled_skills_count} enabled skills")
 
             # Build file upload reminder if there are uploaded files
             from generalAgent.utils.file_processor import build_file_upload_reminder
             uploaded_files = state.get("uploaded_files", [])
             file_upload_reminder = ""
             if uploaded_files:
-                file_upload_reminder = build_file_upload_reminder(uploaded_files)
+                file_upload_reminder = build_file_upload_reminder(uploaded_files, skill_config)
 
-            # Add dynamic reminders (including file upload reminder)
+            # Collect all dynamic reminders
             reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder] if r]
-            if reminders:
-                base_prompt = f"{base_prompt}\n\n{chr(10).join(reminders)}"
-                LOGGER.info(f"  - Reminders added: {len(reminders)} reminder(s)")
+            combined_reminders = "\n\n".join(reminders) if reminders else ""
+
+            if combined_reminders:
+                LOGGER.info(f"  - Built {len(reminders)} reminder(s) to append to last message")
 
         # Log prompt with truncation for readability
         log_prompt(LOGGER, "planner", base_prompt, max_length=500)
         log_visible_tools(LOGGER, "planner", visible_tools)
 
-        prompt_messages = [SystemMessage(content=base_prompt), *recent_history]
+        # ========== Append reminders to last message (KV cache optimization) ==========
+        # Copy recent_history to avoid modifying state
+        message_history = list(recent_history)
+
+        if combined_reminders:
+            if message_history and isinstance(message_history[-1], HumanMessage):
+                # Case A: Last message is HumanMessage - append reminders to it
+                last_msg = message_history[-1]
+                message_history[-1] = HumanMessage(
+                    content=f"{last_msg.content}\n\n{combined_reminders}"
+                )
+                LOGGER.info("  - Appended reminders to last HumanMessage")
+            else:
+                # Case B: Last message is not HumanMessage - add lightweight context message
+                message_history.append(HumanMessage(content=combined_reminders))
+                LOGGER.info("  - Appended lightweight context message with reminders")
+
+        prompt_messages = [SystemMessage(content=base_prompt), *message_history]
 
         # ========== Invoke planner ==========
         # Invoke planner with model selection

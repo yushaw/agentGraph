@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import List
 
 from langchain_core.messages import BaseMessage, SystemMessage, ToolMessage
@@ -30,6 +31,16 @@ def build_finalize_node(
 ):
     max_message_history = settings.governance.max_message_history
 
+    # ========== Build static finalize prompt (with fixed datetime) ==========
+    # Generate datetime tag once at initialization (minute precision)
+    now = datetime.now(timezone.utc)
+    static_datetime_tag = f"<current_datetime>{now.strftime('%Y-%m-%d %H:%M UTC')}</current_datetime>"
+
+    # Datetime tag is placed at the bottom
+    static_finalize_prompt = f"{FINALIZE_SYSTEM_PROMPT}\n\n{static_datetime_tag}"
+
+    LOGGER.info(f"Built static finalize prompt with datetime: {static_datetime_tag}")
+
     @with_error_boundary("finalize")
     async def finalize_node(state: AppState) -> AppState:
         log_node_entry(LOGGER, "finalize", state)
@@ -52,9 +63,8 @@ def build_finalize_node(
         recent_history = truncate_messages_safely(cleaned_history, keep_recent=max_message_history)
         LOGGER.info(f"  - Message history: {len(history)} → {len(cleaned_history)} (cleaned) → {len(recent_history)} (kept)")
 
-        # Add current datetime to prompt
-        datetime_tag = get_current_datetime_tag()
-        finalize_prompt = f"{datetime_tag}\n\n{FINALIZE_SYSTEM_PROMPT}"
+        # Use static finalize prompt (datetime is already at the bottom)
+        finalize_prompt = static_finalize_prompt
 
         # Log the finalize prompt with truncation
         log_prompt(LOGGER, "finalize", finalize_prompt, max_length=500)

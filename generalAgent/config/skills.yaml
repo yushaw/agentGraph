@@ -20,6 +20,24 @@ optional:
     description: "PDF processing and form filling"
     auto_load_on_file_types: ["pdf"]  # 上传 PDF 时自动加载
 
+  docx:
+    enabled: true  # 启用 docx 技能用于测试
+    always_available: false
+    description: "docx file processing and form filling"
+    auto_load_on_file_types: ["docx"]  # 上传 docx 时自动加载
+
+  xlsx:
+    enabled: true  # 启用 xlsx 技能用于测试
+    always_available: false
+    description: "xlsx file processing and form filling"
+    auto_load_on_file_types: ["xlsx"]  # 上传 xlsx 时自动加载
+
+  pptx:
+    enabled: true  # 启用 pptx 技能用于测试
+    always_available: false
+    description: "pptx file processing and form filling"
+    auto_load_on_file_types: ["pptx"]  # 上传 pptx 时自动加载
+
   # excel:
   #   enabled: false
   #   always_available: false

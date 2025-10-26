@@ -14,17 +14,6 @@ from .file_upload_parser import format_file_size
 FileType = Literal["image", "pdf", "text", "code", "office", "unknown"]
 
 
-# Map file type to skill ID (for auto-loading skills)
-FILE_TYPE_TO_SKILL: Dict[FileType, Optional[str]] = {
-    "image": None,  # Images use vision model, not a skill
-    "pdf": "pdf",
-    "text": None,
-    "code": None,
-    "office": None,  # Could add pptx/xlsx skills later
-    "unknown": None,
-}
-
-
 # File size limits (in bytes)
 MAX_FILE_SIZE: Dict[FileType, int] = {
     "image": 10 * 1024 * 1024,   # 10MB
@@ -228,11 +217,12 @@ def process_file(
         )
 
 
-def build_file_upload_reminder(processed_files: List[ProcessedFile | dict]) -> str:
+def build_file_upload_reminder(processed_files: List[ProcessedFile | dict], skill_config=None) -> str:
     """Build system_reminder message for uploaded files.
 
     Args:
         processed_files: List of successfully processed files (ProcessedFile objects or dicts)
+        skill_config: SkillConfig instance for dynamic skill hints (optional)
 
     Returns:
         Formatted system_reminder XML string
@@ -268,11 +258,29 @@ def build_file_upload_reminder(processed_files: List[ProcessedFile | dict]) -> s
         file_num += 1
 
     for file in documents:
+        # Dynamic skill hint based on config
         skill_hint = ""
-        if get_attr(file, "file_type") == "pdf":
-            skill_hint = " [可用 @pdf 处理]"
+        file_type = get_attr(file, "file_type")
+
+        if skill_config:
+            # Extract actual file extension for skill matching
+            # (skills.yaml uses specific extensions like "docx", "pptx", not generic "office")
+            from pathlib import Path
+            filename = get_attr(file, "filename")
+            file_ext = Path(filename).suffix.lstrip('.').lower()  # e.g., "docx", "pptx", "pdf"
+
+            # Get skills that can handle this file extension
+            skills_for_type = skill_config.get_skills_for_file_type(file_ext)
+            if skills_for_type:
+                skill_mentions = ", ".join([f"@{s}" for s in skills_for_type])
+                skill_hint = f" [可用 {skill_mentions} 处理]"
+        else:
+            # Fallback: hardcoded hint for pdf only
+            if file_type == "pdf":
+                skill_hint = " [可用 @pdf 处理]"
+
         lines.append(
-            f"{file_num}. {get_attr(file, 'filename')} ({get_attr(file, 'file_type').upper()}, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')}{skill_hint}"
+            f"{file_num}. {get_attr(file, 'filename')} ({file_type.upper()}, {get_attr(file, 'size_formatted')}) → {get_attr(file, 'workspace_path')}{skill_hint}"
         )
         file_num += 1
 

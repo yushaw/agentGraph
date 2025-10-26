@@ -22,7 +22,6 @@ from generalAgent.utils import (
     parse_mentions,
     parse_file_mentions,
     process_file,
-    FILE_TYPE_TO_SKILL,
 )
 from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
 

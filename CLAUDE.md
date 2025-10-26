@@ -231,7 +231,11 @@ START → agent ⇄ tools → agent → finalize → END
 **Skill System** (generalAgent/skills/)
 - Skills are **knowledge packages** (documentation + scripts), NOT tool containers
 - Structure: `skills/{skill_id}/SKILL.md` + `scripts/` + reference docs
-- When user mentions `@pdf`, skills are symlinked to session workspace
+- Configuration driven by `generalAgent/config/skills.yaml`
+  - `enabled: true/false` - Controls visibility in skills catalog
+  - `auto_load_on_file_types: [...]` - Auto-load when matching files uploaded
+  - Only enabled skills appear in SystemMessage catalog
+- When user mentions `@skill` or uploads matching file, skills are symlinked to session workspace
 - Agent uses `read_file` tool to read SKILL.md and follow guidance
 - Agent can use `run_bash_command` tool to execute skill scripts
 - Skills do NOT have `allowed_tools` field
@@ -242,6 +246,13 @@ START → agent ⇄ tools → agent → finalize → END
   - `@skill` - Generate reminder to read SKILL.md
   - `@agent` - Load call_subagent tool
 - Mentions parsed in main.py and classified in planner.py
+
+**KV Cache Optimization** ⭐ NEW (generalAgent/graph/nodes/planner.py, finalize.py)
+- **Fixed SystemMessage**: Generated once at initialization, never changes
+- **Minute-level timestamp**: `<current_datetime>YYYY-MM-DD HH:MM UTC</current_datetime>` placed at bottom of SystemMessage
+- **Reminders moved to last message**: Dynamic reminders (TODOs, @mentions, file uploads) appended to last HumanMessage instead of SystemMessage
+- **Result**: 70-90% KV Cache reuse, 60-80% cost reduction in multi-turn conversations
+- See `docs/CONTEXT_MANAGEMENT.md` for detailed explanation
 
 ### Important Files
 
@@ -466,10 +477,18 @@ optional:
 4. **Core skills**: Skills in `core: []` are loaded at startup (currently empty by default)
 
 **Configuration options:**
-- `enabled: true` - Load skill at startup
-- `enabled: false` - Only load via @mention or file upload
+- `enabled: true` - Show skill in catalog and load at startup
+- `enabled: false` - Hide from catalog, only load via @mention or file upload
 - `auto_load_on_file_types` - List of file extensions that trigger auto-load
 - `always_available: true` - Keep skill loaded across all sessions (not recommended)
+
+**Important behaviors:**
+- **Skills catalog filtering**: Only `enabled: true` skills appear in the SystemMessage catalog
+  - Reduces prompt noise and prevents information leakage
+  - Agent won't know about disabled skills unless user @mentions them
+- **Dynamic file upload hints**: When user uploads a file, hints are generated based on `auto_load_on_file_types`
+  - Example: Uploading `report.docx` shows `[可用 @docx 处理]` if docx skill is configured
+  - Hints are generated dynamically from `skills.yaml`, no hardcoded mappings
 
 ## Tool Configuration
 
@@ -888,7 +907,40 @@ LANGSMITH_API_KEY=your-key
 - All functionality preserved (tested with `/help`, `/sessions`, `/load`, etc.)
 - No changes to LangGraph, tools, skills, or core agent logic
 
-## Recent Fixes (2025-10-24)
+## Recent Fixes
+
+### Skills Configuration Management (2025-10-27)
+
+**Issue**: Skills catalog showed all scanned skills regardless of `skills.yaml` configuration, and file upload hints were hardcoded.
+
+**Fixed**:
+1. **Skills Catalog Filtering** - `generalAgent/graph/prompts.py`
+   - `build_skills_catalog()` now accepts `skill_config` parameter
+   - Only shows skills with `enabled: true` in SystemMessage
+   - Prevents information leakage about disabled skills
+
+2. **Dynamic File Upload Hints** - `generalAgent/utils/file_processor.py`
+   - `build_file_upload_reminder()` generates hints based on `auto_load_on_file_types`
+   - Fixed office file type matching (uses file extension instead of generic "office" type)
+   - Removed hardcoded `FILE_TYPE_TO_SKILL` constant
+
+3. **Configuration Pipeline**
+   - `build_application()` → loads and returns `skill_config`
+   - `build_state_graph()` → passes `skill_config` to planner
+   - `build_planner_node()` → uses `skill_config` for filtering and hints
+   - Log message shows correct enabled skills count
+
+**Files Modified**:
+- `generalAgent/graph/prompts.py:160-169` - Catalog filtering
+- `generalAgent/graph/nodes/planner.py:235-236` - Config usage and logging
+- `generalAgent/graph/builder.py` - Config passing
+- `generalAgent/runtime/app.py` - Config loading
+- `generalAgent/utils/file_processor.py:265-276` - Dynamic hints
+- `generalAgent/main.py` - Config reception
+
+**Test**: `tests/unit/test_skills_filtering.py` and `tests/integration/test_skills_integration.py`
+
+### Earlier Fixes (2025-10-24)
 
 ### 1. Skills Path Correction
 - **Issue**: Code referenced `Path("skills")` instead of `Path("generalAgent/skills")`

@@ -28,6 +28,7 @@ def build_state_graph(
     tool_registry: ToolRegistry,
     persistent_global_tools: List,
     skill_registry,
+    skill_config,
     settings,
     checkpointer=None,
     approval_checker=None,  # HITL: 审批检测器（可选）
@@ -60,6 +61,7 @@ def build_state_graph(
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
         skill_registry=skill_registry,
+        skill_config=skill_config,
         settings=settings,
     )
 

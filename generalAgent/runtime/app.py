@@ -136,7 +136,7 @@ async def build_application(
         mcp_tools: Optional list of MCP tools to register
 
     Returns:
-        (app, initial_state_factory, skill_registry, tool_registry) tuple
+        (app, initial_state_factory, skill_registry, tool_registry, skill_config) tuple
     """
 
     settings = get_settings()
@@ -148,6 +148,12 @@ async def build_application(
 
     skills_root = skills_root or resolve_project_path("generalAgent/skills")
     skill_registry = _create_skill_registry(skills_root)
+
+    # Load skill configuration
+    from generalAgent.config.skill_config_loader import load_skill_config
+    skill_config_path = resolve_project_path("generalAgent/config/skills.yaml")
+    skill_config = load_skill_config(skill_config_path)
+    LOGGER.info(f"Skill config loaded: {len(skill_config.get_enabled_skills())} enabled skills")
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry, mcp_tools)
 
@@ -172,6 +178,7 @@ async def build_application(
         tool_registry=tool_registry,
         persistent_global_tools=persistent_global_tools,
         skill_registry=skill_registry,
+        skill_config=skill_config,
         settings=settings,
         checkpointer=checkpointer,
         approval_checker=approval_checker,
@@ -201,4 +208,4 @@ async def build_application(
             "uploaded_files": [],  # Track uploaded files
         }
 
-    return app, initial_state, skill_registry, tool_registry
+    return app, initial_state, skill_registry, tool_registry, skill_config

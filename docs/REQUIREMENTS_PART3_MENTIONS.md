@@ -193,6 +193,36 @@ if dynamic_reminder:
     system_parts.append(dynamic_reminder)
 ```
 
+**技能配置管理** (2025-10-27 新增)：
+
+技能通过 `generalAgent/config/skills.yaml` 配置文件管理：
+
+```yaml
+# globalAgent/config/skills.yaml
+optional:
+  pdf:
+    enabled: false  # 不在 catalog 中显示
+    auto_load_on_file_types: ["pdf"]
+    description: "PDF processing"
+
+  docx:
+    enabled: true  # 在 catalog 中显示
+    auto_load_on_file_types: ["docx"]
+    description: "DOCX processing"
+```
+
+**Skills Catalog 过滤**：
+- `build_skills_catalog(skill_registry, skill_config)` 只显示 `enabled: true` 的技能
+- 减少 SystemMessage 噪音，防止信息泄露
+- 禁用的技能仍可通过 @mention 或文件上传触发
+
+**动态文件上传提示**：
+- 根据 `auto_load_on_file_types` 动态生成提示
+- 示例：上传 `report.docx` → 生成 `[可用 @docx 处理]`
+- 使用实际文件扩展名匹配（如 `"docx"`），非通用类型（如 `"office"`）
+
+详见：`docs/SKILLS_CONFIGURATION.md`
+
 ### 7.5 代理委派（Agent）
 
 **需求描述**：当用户 @提及 agent 时，加载 call_subagent 工具。
@@ -299,8 +329,9 @@ def planner_node(state: AppState):
     # Build system prompt parts
     system_parts = [PLANNER_SYSTEM_PROMPT]
 
-    # Add skills catalog
-    skills_catalog = build_skills_catalog(skill_registry)
+    # Add skills catalog (filtered by skill_config)
+    # Only skills with enabled: true in skills.yaml are shown
+    skills_catalog = build_skills_catalog(skill_registry, skill_config)
     if skills_catalog:
         system_parts.append(skills_catalog)
 

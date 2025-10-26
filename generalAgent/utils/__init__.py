@@ -13,7 +13,7 @@ from .logging_utils import (
 )
 from .mention_parser import format_mention_reminder, parse_mentions
 from .file_upload_parser import parse_file_mentions
-from .file_processor import process_file, build_file_upload_reminder, ProcessedFile, FILE_TYPE_TO_SKILL
+from .file_processor import process_file, build_file_upload_reminder, ProcessedFile
 from .message_utils import _stringify_content
 from .error_handler import (
     with_error_boundary,
@@ -42,7 +42,6 @@ __all__ = [
     "process_file",
     "build_file_upload_reminder",
     "ProcessedFile",
-    "FILE_TYPE_TO_SKILL",
     "_stringify_content",
     "with_error_boundary",
     "safe_tool_call",

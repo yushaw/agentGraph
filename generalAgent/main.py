@@ -54,15 +54,10 @@ async def async_main():
             logger.info("No MCP configuration found, skipping MCP integration")
 
         # Build application (LangGraph + registries)
-        app, initial_state_factory, skill_registry, tool_registry = await build_application(
+        app, initial_state_factory, skill_registry, tool_registry, skill_config = await build_application(
             mcp_tools=mcp_tools
         )
         logger.info("Application built successfully")
-
-        # Load skill configuration
-        skill_config_path = resolve_project_path("generalAgent/config/skills.yaml")
-        skill_config = load_skill_config(skill_config_path)
-        logger.info(f"Skill configuration loaded: {len(skill_config.get_enabled_skills())} enabled")
 
         # Initialize shared infrastructure
         session_store = SessionStore()
