@@ -1,7 +1,19 @@
 """Reflective testing for HITL approval system using reasoning model.
 
 Uses the "reason" model to analyze approval decisions and identify edge cases,
-false positives, and potential improvements.
+false positives, and potential improvements through AI-powered reflection.
+
+This test suite demonstrates a novel testing approach where an AI model
+evaluates the correctness of security decisions made by another AI system.
+
+Test Classes:
+    - TestReflectivePasswordDetection: Analyze password detection rules
+    - TestReflectiveEdgeCaseGeneration: Generate boundary test cases
+    - TestReflectiveFalsePositiveAnalysis: Identify false positives
+
+Requirements:
+    - MODEL_REASON_API_KEY must be set in .env
+    - Reasoning model must support JSON output extraction
 """
 
 import pytest
@@ -12,17 +24,30 @@ import json
 from typing import List, Dict, Any
 
 from generalAgent.hitl.approval_checker import ApprovalChecker, ApprovalDecision
-from generalAgent.models.registry import ModelRegistry
 from generalAgent.config.settings import get_settings
+from generalAgent.runtime.model_resolver import resolve_model_configs, build_model_resolver
 
 
 class ReflectiveTestRunner:
-    """使用 reasoning 模型进行反思性测试的运行器"""
+    """Test runner that uses reasoning model for reflective analysis.
+
+    This runner demonstrates using AI to analyze AI security decisions.
+    It loads the configured reasoning model and provides methods to:
+    - Analyze approval decisions for correctness
+    - Generate edge cases for security rules
+    - Identify false positives/negatives
+
+    The reasoning model is obtained via the model resolver pattern,
+    ensuring it matches the application's production configuration.
+    """
 
     def __init__(self):
         self.settings = get_settings()
-        self.registry = ModelRegistry(self.settings.models)
-        self.reason_model = self.registry.get("reason")
+        model_configs = resolve_model_configs(self.settings)
+        self.model_resolver = build_model_resolver(model_configs)
+        # Get the reasoning model ID and resolve it to actual model instance
+        reason_model_id = model_configs["reason"]["id"]
+        self.reason_model = self.model_resolver(reason_model_id)
 
     def analyze_decision(
         self, tool_name: str, args: dict, decision: ApprovalDecision, expected_approval: bool

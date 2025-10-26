@@ -1,6 +1,10 @@
-# Test MCP Servers
+# Test Fixtures
 
-This directory contains test MCP servers for development and testing.
+This directory contains test fixtures and helpers used across the test suite.
+
+## Test MCP Servers
+
+Test MCP servers for MCP integration testing.
 
 ## Available Servers
 

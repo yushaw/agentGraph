@@ -160,16 +160,37 @@ cd generalAgent && python main.py
 **Note**: The codebase now uses **project-root-aware path resolution**, so you can run from any directory. All paths (tools, skills, config, logs, data) are automatically resolved relative to the project root.
 
 ### Testing
+
+The project has a comprehensive test suite organized into four tiers:
+
 ```bash
-# Run all tests
-pytest
+# Quick validation before commits (< 30s)
+python tests/run_tests.py smoke
 
-# Run specific test file
-pytest tests/test_mention_types.py
+# Run unit tests
+python tests/run_tests.py unit
 
-# Run with verbose output
-pytest -v
+# Run integration tests
+python tests/run_tests.py integration
+
+# Run end-to-end business workflow tests
+python tests/run_tests.py e2e
+
+# Run all test types
+python tests/run_tests.py all
+
+# Generate coverage report
+python tests/run_tests.py coverage
 ```
+
+**Test organization:**
+- `tests/smoke/` - Fast critical-path tests for quick validation
+- `tests/unit/` - Module-level tests (HITL, MCP, Tools, Skills, etc.)
+- `tests/integration/` - Module interaction tests (@mention system, registries, etc.)
+- `tests/e2e/` - Complete business workflow tests
+- `tests/fixtures/` - Test infrastructure (test MCP servers, etc.)
+
+**For detailed testing guidelines**, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md)
 
 ## Architecture
 
@@ -768,6 +789,39 @@ MODEL_CHAT_ID=kimi-k2-0905-preview
 ```
 
 The system also supports canonical names (MODEL_BASE_*, MODEL_REASON_*, MODEL_VISION_*, MODEL_CODE_*, MODEL_CHAT_*) which are aliased to the provider-specific names above.
+
+### Settings Architecture
+
+The configuration system uses **Pydantic BaseSettings** for automatic environment variable loading:
+
+**Structure** (generalAgent/config/settings.py):
+```python
+Settings
+├── ModelRoutingSettings     # Model IDs and credentials
+├── GovernanceSettings       # Runtime controls (auto_approve, max_loops)
+└── ObservabilitySettings    # Tracing, logging, persistence
+```
+
+**Key Features**:
+- **Automatic .env loading** - All settings classes inherit from `BaseSettings`
+- **Multiple aliases** - `AliasChoices` support provider-specific names (MODEL_BASIC_*, MODEL_REASONING_*, etc.)
+- **No fallbacks needed** - Settings are loaded directly from environment, no manual `os.getenv()` calls
+- **Type validation** - Pydantic validates types, ranges (e.g., `max_loops: int = Field(ge=1, le=500)`)
+
+**Example**:
+```python
+from generalAgent.config.settings import get_settings
+
+settings = get_settings()  # Cached singleton
+api_key = settings.models.reason_api_key  # Automatically loaded from .env
+max_loops = settings.governance.max_loops  # Default: 100
+```
+
+**Recent Optimization** (2025-10-27):
+- Changed nested settings from `BaseModel` to `BaseSettings`
+- Added `SettingsConfigDict(env_file=".env", ...)` to enable environment loading
+- Removed manual fallback patterns (`or _env()`) from business logic
+- All 5 reflective HITL tests now pass with proper model initialization
 
 ## Refactoring Notes
 

@@ -69,13 +69,18 @@ def test_get_directories(sample_config):
     """Test getting scan directories."""
     config = ToolConfig(sample_config)
 
-    assert config.get_builtin_directory() == Path("generalAgent/tools/builtin")
-    assert config.get_custom_directory() == Path("custom_tools")
+    # Note: resolve_project_path() 返回绝对路径,所以要比较路径的最后部分
+    builtin_dir = config.get_builtin_directory()
+    custom_dir = config.get_custom_directory()
+
+    assert builtin_dir.is_absolute(), "builtin directory should be absolute path"
+    assert str(builtin_dir).endswith("generalAgent/tools/builtin"), f"Got: {builtin_dir}"
+    assert custom_dir.name == "custom_tools", f"Got: {custom_dir}"
 
     scan_dirs = config.get_scan_directories()
     assert len(scan_dirs) == 2
-    assert scan_dirs[0] == Path("generalAgent/tools/builtin")
-    assert scan_dirs[1] == Path("custom_tools")
+    assert str(scan_dirs[0]).endswith("generalAgent/tools/builtin")
+    assert scan_dirs[1].name == "custom_tools"
 
 
 def test_default_config_when_file_missing():

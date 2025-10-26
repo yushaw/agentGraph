@@ -1,4 +1,16 @@
-"""Environment-bound configuration objects."""
+"""Environment-bound configuration objects.
+
+This module provides Pydantic BaseSettings-based configuration loading from .env files.
+All settings classes automatically load from environment variables with support for
+multiple alias names (e.g., MODEL_BASIC_* and MODEL_BASE_* both work).
+
+Example:
+    from generalAgent.config.settings import get_settings
+
+    settings = get_settings()  # Cached singleton
+    api_key = settings.models.reason_api_key
+    max_loops = settings.governance.max_loops
+"""
 
 from __future__ import annotations
 
@@ -13,8 +25,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 load_dotenv()
 
 
-class ModelRoutingSettings(BaseModel):
-    """Vendor-neutral model identifiers pulled from env."""
+class ModelRoutingSettings(BaseSettings):
+    """Vendor-neutral model identifiers and credentials.
+
+    Automatically loads from .env file with support for multiple alias names:
+    - MODEL_BASE, MODEL_BASE_ID, MODEL_BASIC_ID (DeepSeek/generic base model)
+    - MODEL_REASON, MODEL_REASON_ID, MODEL_REASONING_ID (reasoning model)
+    - MODEL_VISION, MODEL_VISION_ID, MODEL_MULTIMODAL_ID (vision model)
+    - MODEL_CODE, MODEL_CODE_ID (code generation model)
+    - MODEL_CHAT, MODEL_CHAT_ID (chat model)
+
+    Each model slot has three fields: id, api_key, base_url.
+    """
 
     base: str = Field(
         default="base-quick",
@@ -27,6 +49,12 @@ class ModelRoutingSettings(BaseModel):
     base_base_url: Optional[str] = Field(
         default=None,
         validation_alias=AliasChoices("MODEL_BASE_URL", "MODEL_BASIC_BASE_URL"),
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     reason: str = Field(
@@ -82,16 +110,34 @@ class ModelRoutingSettings(BaseModel):
     )
 
 
-class GovernanceSettings(BaseModel):
-    """Runtime governance toggles."""
+class GovernanceSettings(BaseSettings):
+    """Runtime governance and control settings.
+
+    Controls agent behavior limits and policies:
+    - auto_approve_writes: Skip HITL approval for file writes (default: False)
+    - max_loops: Maximum agent loop iterations (1-500, default: 100)
+    - max_message_history: Message history window size (10-100, default: 40)
+    """
 
     auto_approve_writes: bool = Field(default=False, alias="AUTO_APPROVE_WRITES")
     max_loops: int = Field(default=100, ge=1, le=500)
     max_message_history: int = Field(default=40, ge=10, le=100, alias="MAX_MESSAGE_HISTORY")
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
-class ObservabilitySettings(BaseModel):
-    """Tracing & persistence feature flags."""
+
+class ObservabilitySettings(BaseSettings):
+    """Tracing, logging, and persistence configuration.
+
+    Controls observability features:
+    - LangSmith tracing (LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT, etc.)
+    - Logging settings (LOG_PROMPT_MAX_LENGTH)
+    - Session persistence (SESSION_DB_PATH for SQLite storage)
+    """
 
     langsmith_project: Optional[str] = Field(default=None, alias="LANGCHAIN_PROJECT")
     langsmith_api_key: Optional[str] = Field(
@@ -108,9 +154,24 @@ class ObservabilitySettings(BaseModel):
     # Set to empty string to disable persistence
     session_db_path: Optional[str] = Field(default=None, alias="SESSION_DB_PATH")
 
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
 
 class Settings(BaseSettings):
-    """Application settings rooted in `.env`."""
+    """Root application settings loaded from .env file.
+
+    Hierarchical structure containing three nested settings groups:
+    - models: Model routing and API credentials (ModelRoutingSettings)
+    - governance: Agent behavior controls (GovernanceSettings)
+    - observability: Tracing and logging (ObservabilitySettings)
+
+    All values are automatically loaded from .env via Pydantic BaseSettings.
+    Use get_settings() to obtain a cached singleton instance.
+    """
 
     environment: str = Field(default="dev", alias="APP_ENV")
     models: ModelRoutingSettings = Field(default_factory=ModelRoutingSettings)
@@ -128,6 +189,12 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return a cached Settings instance."""
+    """Return a cached singleton Settings instance.
 
+    Uses LRU cache to ensure only one Settings object is created per process.
+    All configuration is automatically loaded from .env file.
+
+    Returns:
+        Settings: Cached application settings instance
+    """
     return Settings()

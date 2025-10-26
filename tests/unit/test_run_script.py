@@ -143,11 +143,15 @@ print("Hello from Python script!")
 print(f"Python version: {sys.version_info.major}.{sys.version_info.minor}")
 """)
 
+    # Note: macOS 上 python 命令可能不存在,需要用 python3 或 sys.executable
+    import sys
+    python_cmd = sys.executable  # 使用当前 Python 解释器
+
     result = run_bash_command.invoke({
-        "command": f"python {script_path}"
+        "command": f"{python_cmd} {script_path}"
     })
 
-    assert "Error" not in result
+    assert "Error" not in result, f"Unexpected error: {result}"
     assert "Hello from Python script!" in result
 
 
