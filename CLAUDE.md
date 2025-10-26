@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AgentGraph is a LangGraph-based agent framework with an **Agent Loop architecture** (Claude Code style). The system uses:
 - Single agent loop where the LLM decides execution flow via tool calls
+- **HITL (Human-in-the-Loop)** support for interactive workflows and safety
 - Flexible skill packages with SKILL.md documentation
 - On-demand tool loading with `@mention` support
 - Multi-model routing (base, reasoning, vision, code, chat)
@@ -31,8 +32,18 @@ project/
 │   ├── runtime/
 │   │   └── app.py            # Application assembly
 │   ├── graph/                # LangGraph nodes & routing
+│   ├── hitl/                 # HITL (Human-in-the-Loop) components
+│   │   ├── approval_checker.py  # Tool approval rule engine
+│   │   └── approval_node.py     # Approval-aware ToolNode wrapper
 │   ├── tools/                # Tool system
+│   │   └── builtin/
+│   │       └── ask_human.py  # User input request tool
 │   ├── skills/               # Skill packages
+│   ├── config/
+│   │   ├── hitl_rules.yaml   # Approval rules configuration
+│   │   ├── skills.yaml       # Skills loading configuration
+│   │   ├── tools.yaml        # Tools loading configuration
+│   │   └── skill_config_loader.py  # Skills config parser
 │   └── utils/                # Utilities
 │
 ├── main.py                    # Entrypoint for GeneralAgent CLI
@@ -288,6 +299,157 @@ run_bash_command("python skills/pdf/scripts/fill_fillable_fields.py uploads/form
 run_bash_command("python skills/pdf/scripts/extract_form_field_info.py uploads/form.pdf outputs/fields.json")
 ```
 
+## HITL (Human-in-the-Loop)
+
+GeneralAgent supports two core HITL patterns for interactive agent workflows:
+
+### 1. ask_human Tool - Agent Requests User Input
+
+The `ask_human` tool allows the Agent to actively request information from the user when needed.
+
+**Tool interface:**
+```python
+ask_human(
+    question="Your question here",
+    context="Why this information is needed",  # Optional
+    input_type="text",  # Currently only "text" supported
+    default=None,  # Optional default value
+    required=True  # Whether answer is required
+)
+```
+
+**Example usage:**
+```
+User> 帮我订个酒店
+Agent> [calls ask_human tool]
+
+💡 需要知道城市才能搜索酒店
+💬 您想预订哪个城市的酒店？
+> 北京
+
+Agent> 好的，正在搜索北京的酒店...
+```
+
+**How it works:**
+- Agent decides to call `ask_human` via LLM decision (just like any other tool)
+- Graph execution pauses (LangGraph `interrupt()`)
+- User provides input via CLI
+- Answer is returned as ToolMessage and added to LLM context
+- Agent continues with the answer
+
+### 2. Tool Approval - System Intercepts Dangerous Operations
+
+Dangerous tool operations automatically trigger user approval before execution.
+
+**Configuration:** `generalAgent/config/hitl_rules.yaml`
+
+```yaml
+global:
+  enabled: true
+  default_action: allow
+
+tools:
+  run_bash_command:
+    enabled: true
+    patterns:
+      high_risk:
+        - "rm\\s+-rf"           # Force delete
+        - "sudo"                # Privilege escalation
+      medium_risk:
+        - "curl"                # Network requests
+        - "pip\\s+install"      # Package installation
+    actions:
+      high_risk: require_approval
+      medium_risk: require_approval
+```
+
+**Example approval flow:**
+```
+User> @run_bash_command 帮我执行 rm -rf /tmp/test
+Agent> [attempts to call run_bash_command]
+
+🛡️  工具审批: run_bash_command
+   原因: 匹配high_risk风险模式: rm\s+-rf
+   参数: command="rm -rf /tmp/test"
+   批准? [y/n] > n
+
+✗ 已拒绝
+Agent> 出于安全考虑，系统阻止了执行 rm -rf 命令...
+```
+
+**How it works:**
+- Agent calls a tool normally (LLM decision)
+- `ApprovalToolNode` intercepts the call before execution
+- `ApprovalChecker` analyzes tool arguments against rules
+- If risky, triggers `interrupt()` for user approval
+- Approval/rejection is transparent to LLM (not in conversation history)
+- If approved, tool executes normally
+- If rejected, returns error ToolMessage to LLM
+
+**Three-layer approval rules:**
+1. **Config file** (`hitl_rules.yaml`) - Regex pattern matching
+2. **Tool custom checkers** - Programmatic rules registered via `ApprovalChecker.register_checker()`
+3. **Built-in defaults** - Hardcoded safety rules in `approval_checker.py`
+
+### HITL Architecture
+
+**Key Components:**
+
+1. **ApprovalChecker** (`generalAgent/hitl/approval_checker.py`)
+   - Examines tool arguments for risk patterns
+   - Returns `ApprovalDecision` with risk level and reason
+   - Supports regex pattern matching and custom checkers
+
+2. **ApprovalToolNode** (`generalAgent/hitl/approval_node.py`)
+   - Wraps LangGraph `ToolNode`
+   - Intercepts tool calls before execution
+   - Triggers `interrupt()` if approval needed
+   - Returns rejection ToolMessage if user declines
+
+3. **CLI Interrupt Handling** (`generalAgent/cli.py`)
+   - After each `astream()`, checks for interrupts via `aget_state()`
+   - Handles two interrupt types: `user_input_request` and `tool_approval`
+   - Resumes execution with `Command(resume=value)`
+   - Minimal UI prompts (极简版)
+
+4. **LangGraph Checkpointer**
+   - Required for interrupt/resume functionality
+   - Currently uses `MemorySaver` (in-memory, session-scoped)
+   - Can be upgraded to `AsyncSqliteSaver` for persistent checkpointing
+
+**Note:** Approval decisions are NOT added to LLM conversation history - they're purely system-level behavior. Only tool results (approved execution or rejection message) are visible to the LLM.
+
+## Skill Configuration
+
+Skills can be controlled via `generalAgent/config/skills.yaml`:
+
+```yaml
+global:
+  enabled: true
+  auto_load_on_file_upload: true  # Auto-load skill when uploading matching files
+
+core: []  # Skills always loaded at startup
+
+optional:
+  pdf:
+    enabled: false  # Default: not loaded
+    always_available: false
+    description: "PDF processing and form filling"
+    auto_load_on_file_types: ["pdf"]  # Auto-load when .pdf uploaded
+```
+
+**Skill loading behavior:**
+1. **Default**: Skills are NOT loaded unless explicitly requested
+2. **@mention**: `@pdf` loads the skill to workspace
+3. **File upload**: Uploading a `.pdf` file auto-loads pdf skill (if `auto_load_on_file_upload: true`)
+4. **Core skills**: Skills in `core: []` are loaded at startup (currently empty by default)
+
+**Configuration options:**
+- `enabled: true` - Load skill at startup
+- `enabled: false` - Only load via @mention or file upload
+- `auto_load_on_file_types` - List of file extensions that trigger auto-load
+- `always_available: true` - Keep skill loaded across all sessions (not recommended)
+
 ## Tool Configuration
 
 Edit `generalAgent/config/tools.yaml` to control tool availability:
@@ -405,6 +567,180 @@ Script execution failed: Missing dependency
 2. 手动安装: pip install pypdf2
 3. 或联系技能维护者添加依赖声明
 ```
+
+## HITL (Human-in-the-Loop) Mechanism
+
+AgentGraph integrates two HITL patterns for human oversight and interaction:
+
+### 1. ask_human Tool - Agent-Initiated Interaction
+
+**Purpose**: Allow the agent to actively request information from users when needed.
+
+**When to use:**
+- Agent lacks necessary information to proceed
+- Need user confirmation for critical decisions
+- Require user choice between multiple options
+
+**Tool Interface:**
+```python
+ask_human(
+    question: str,              # The question to ask
+    context: str = "",          # Additional context for the user
+    input_type: "text",         # Currently only "text" supported
+    default: Optional[str] = None,
+    required: bool = True
+)
+```
+
+**Example Usage:**
+```
+Agent> 我需要了解您的偏好才能继续。
+       [Calls ask_human(question="您希望报告以什么格式输出？", ...)]
+
+User receives:
+💬 您希望报告以什么格式输出？
+   (默认: markdown)
+> PDF
+
+Agent> 好的，我将生成 PDF 格式的报告。
+```
+
+**Implementation Details:**
+- Uses `interrupt()` to pause graph execution
+- User response stored in conversation history as ToolMessage
+- Future extensibility: choice/multi_choice input types planned
+
+### 2. Tool Approval Framework - System-Level Safety
+
+**Purpose**: Detect and prevent potentially dangerous operations automatically.
+
+**How it works:**
+1. **Intercept**: ApprovalToolNode wraps ToolNode and examines all tool calls
+2. **Evaluate**: ApprovalChecker uses three-layer rule system to determine risk
+3. **Pause**: If approval needed, graph execution pauses via `interrupt()`
+4. **Resume**: User approves/rejects, graph continues with result
+
+**Four-Layer Approval Rules:**
+
+**Priority 1 - Tool Custom Checkers** (highest priority)
+```python
+# Custom logic for specific tools
+def check_bash_command(args: dict) -> ApprovalDecision:
+    command = args.get("command", "")
+    if re.search(r"rm\s+-rf", command):
+        return ApprovalDecision(
+            needs_approval=True,
+            reason="删除命令可能影响系统文件",
+            risk_level="high"
+        )
+```
+
+**Priority 2 - Global Risk Patterns** (cross-tool detection)
+```yaml
+# generalAgent/config/hitl_rules.yaml
+global:
+  risk_patterns:
+    critical:
+      patterns:
+        - "password\\s*[=:]\\s*['\"]?\\w+"      # Password leak
+        - "api[_-]?key\\s*[=:]\\s*"             # API key leak
+        - "secret\\s*[=:]\\s*"                  # Secret leak
+      action: require_approval
+      reason: "检测到敏感信息（密码/密钥/令牌）"
+    high:
+      patterns:
+        - "/etc/passwd"                          # System files
+        - "DROP\\s+(TABLE|DATABASE)"             # SQL deletion
+```
+
+**Priority 3 - Tool-Specific Config Rules**
+```yaml
+# generalAgent/config/hitl_rules.yaml
+tools:
+  run_bash_command:
+    enabled: true
+    patterns:
+      high_risk:
+        - "rm\\s+-rf"
+        - "sudo"
+      medium_risk:
+        - "curl"
+        - "wget"
+    actions:
+      high_risk: require_approval
+      medium_risk: require_approval
+```
+
+**Priority 4 - Built-in Default Rules** (fallback)
+```python
+# Safe operations allowed by default
+SAFE_COMMANDS = ["ls", "pwd", "cat", "grep", ...]
+```
+
+**User Experience (极简版):**
+```
+Agent decides to run: curl https://example.com
+
+User sees:
+🛡️  工具审批: run_bash_command
+   原因: 网络请求需要确认
+   参数: curl https://example.com
+   批准? [y/n] > y
+
+Agent continues with approved command
+```
+
+**Key Design Principles:**
+- **Transparent to LLM**: Approval decisions NOT added to conversation context
+- **Capability-level granularity**: Approval based on arguments, not entire tool
+- **Four-layer architecture**: Custom checkers → Global patterns → Tool rules → Default
+- **Cross-tool detection**: Global patterns detect risks across all tools (e.g., password leaks)
+- **Extensible**: Easy to add new patterns and custom checkers
+- **MVP-ready**: Production-quality error handling and user prompts
+
+**Configuration:**
+Edit `generalAgent/config/hitl_rules.yaml` to customize approval behavior:
+```yaml
+global:
+  # Global risk patterns (apply to all tools)
+  risk_patterns:
+    critical:
+      patterns:
+        - "password\\s*[=:]\\s*['\"]?\\w+"
+        - "api[_-]?key\\s*[=:]\\s*"
+      action: require_approval
+      reason: "检测到敏感信息"
+
+tools:
+  # Tool-specific rules
+  http_fetch:
+    enabled: true
+    patterns:
+      high_risk:
+        - "internal\\.company\\.com"  # Block internal domains
+    actions:
+      high_risk: require_approval
+
+  run_bash_command:
+    enabled: true
+    patterns:
+      high_risk:
+        - "rm\\s+-rf"
+        - "sudo"
+        - "chmod\\s+777"
+      medium_risk:
+        - "curl"
+        - "wget"
+        - "pip\\s+install"
+```
+
+**Implementation Files:**
+- `generalAgent/hitl/approval_checker.py` - Four-layer rule system (lines 20-150)
+- `generalAgent/hitl/approval_node.py` - ApprovalToolNode wrapper (lines 22-80)
+- `generalAgent/tools/builtin/ask_human.py` - ask_human tool implementation
+- `generalAgent/graph/builder.py:79-91` - Conditional ApprovalToolNode integration
+- `generalAgent/cli.py:252-288` - Interrupt handling loop
+- `generalAgent/cli.py:370-443` - User interaction handlers (极简版 UI)
 
 ## Model Configuration
 

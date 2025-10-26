@@ -16,6 +16,7 @@ from generalAgent.runtime import build_application
 from generalAgent.cli import GeneralAgentCLI
 from generalAgent.utils import get_logger
 from generalAgent.config.project_root import resolve_project_path
+from generalAgent.config.skill_config_loader import load_skill_config
 from shared.session.manager import SessionManager
 from shared.session.store import SessionStore
 from shared.workspace.manager import WorkspaceManager
@@ -58,6 +59,11 @@ async def async_main():
         )
         logger.info("Application built successfully")
 
+        # Load skill configuration
+        skill_config_path = resolve_project_path("generalAgent/config/skills.yaml")
+        skill_config = load_skill_config(skill_config_path)
+        logger.info(f"Skill configuration loaded: {len(skill_config.get_enabled_skills())} enabled")
+
         # Initialize shared infrastructure
         session_store = SessionStore()
         workspace_manager = WorkspaceManager(skill_registry=skill_registry)
@@ -88,6 +94,7 @@ async def async_main():
             session_manager=session_manager,
             skill_registry=skill_registry,
             tool_registry=tool_registry,
+            skill_config=skill_config,
             logger=logger
         )
 

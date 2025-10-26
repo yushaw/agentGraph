@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Set
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.types import Command
 
 from shared.cli.base_cli import BaseCLI
 from shared.session.manager import SessionManager
@@ -49,6 +50,7 @@ class GeneralAgentCLI(BaseCLI):
         session_manager: SessionManager,
         skill_registry,
         tool_registry,
+        skill_config,
         logger
     ):
         """Initialize GeneralAgent CLI.
@@ -58,19 +60,22 @@ class GeneralAgentCLI(BaseCLI):
             session_manager: Session lifecycle manager
             skill_registry: Skill registry for mention classification
             tool_registry: Tool registry for mention classification
+            skill_config: Skill configuration loader
             logger: Application logger
         """
         super().__init__(session_manager)
         self.app = app
         self.skill_registry = skill_registry
         self.tool_registry = tool_registry
+        self.skill_config = skill_config
         self.logger = logger
 
         # Add custom command handler
         self._command_handlers["/clean"] = self._handle_clean
 
-        # Track printed tool IDs to avoid duplication
+        # Track printed tool IDs and message IDs to avoid duplication
         self.printed_tool_ids: Set[str] = set()
+        self.printed_message_ids: Set[str] = set()
 
         LOGGER.info("GeneralAgentCLI initialized")
 
@@ -161,10 +166,12 @@ class GeneralAgentCLI(BaseCLI):
                             f"{result.size_formatted}) → {result.workspace_path}"
                         )
 
-                        # Auto-load corresponding skill
-                        skill_id = FILE_TYPE_TO_SKILL.get(result.file_type)
-                        if skill_id and skill_id not in auto_load_skills:
-                            auto_load_skills.append(skill_id)
+                        # Auto-load corresponding skill (if enabled in config)
+                        if self.skill_config.auto_load_on_file_upload():
+                            skills_for_type = self.skill_config.get_skills_for_file_type(result.file_type)
+                            for skill_id in skills_for_type:
+                                if skill_id not in auto_load_skills:
+                                    auto_load_skills.append(skill_id)
 
                 if processed_files:
                     print(f"[已上传 {len(processed_files)} 个文件]")
@@ -244,9 +251,52 @@ class GeneralAgentCLI(BaseCLI):
                 last_printed_msg_count = len(current_messages)
                 final_state = state_snapshot
 
-            # Update state
+            # Update state after initial stream
             state = final_state
             self.session_manager.current_state = state
+
+            # Handle interrupts (HITL support)
+            while True:
+                graph_state = await self.app.aget_state(config)
+
+                # Check if there are any interrupts
+                if graph_state.next and graph_state.tasks and hasattr(graph_state.tasks[0], 'interrupts') and graph_state.tasks[0].interrupts:
+                    # Update last_printed_msg_count BEFORE handling interrupt
+                    # to avoid reprinting messages after resume
+                    current_msg_count = len(state.get("messages", []))
+                    last_printed_msg_count = current_msg_count
+
+                    # Get interrupt data
+                    interrupt_value = graph_state.tasks[0].interrupts[0].value
+                    resume_value = await self._handle_interrupt(interrupt_value)
+
+                    if resume_value is not None:
+                        # Resume execution with user's response
+                        async for state_snapshot in self.app.astream(
+                            Command(resume=resume_value),
+                            config=config,
+                            stream_mode="values"
+                        ):
+                            current_messages = state_snapshot.get("messages", [])
+
+                            # Print new messages
+                            for idx in range(last_printed_msg_count, len(current_messages)):
+                                msg = current_messages[idx]
+                                await self._print_message(msg)
+
+                            last_printed_msg_count = len(current_messages)
+                            final_state = state_snapshot
+
+                        # Update state after resume
+                        state = final_state
+                        self.session_manager.current_state = state
+                    else:
+                        # User cancelled, break loop
+                        print("⚠️  任务已取消")
+                        break
+                else:
+                    # No more interrupts, execution complete
+                    break
 
             # Log agent response
             for msg in state.get("messages", [])[start_index:]:
@@ -261,9 +311,35 @@ class GeneralAgentCLI(BaseCLI):
             )
 
         except Exception as e:
-            print(f"\n❌ 发生错误: {e}")
+            # Handle different error types
+            error_msg = str(e)
+            error_type = type(e).__name__
+
+            # Check for common LLM errors
+            if "token" in error_msg.lower() and ("limit" in error_msg.lower() or "maximum" in error_msg.lower()):
+                print(f"\n❌ Token 限制错误:")
+                print(f"   {error_msg}")
+                print(f"   建议：尝试精简输入内容或重置会话 (/reset)")
+            elif "api" in error_msg.lower() and "key" in error_msg.lower():
+                print(f"\n❌ API 密钥错误:")
+                print(f"   {error_msg}")
+                print(f"   建议：检查 .env 文件中的 API key 配置")
+            elif "rate" in error_msg.lower() and "limit" in error_msg.lower():
+                print(f"\n❌ API 速率限制:")
+                print(f"   {error_msg}")
+                print(f"   建议：稍等片刻后重试")
+            elif "timeout" in error_msg.lower() or "connection" in error_msg.lower():
+                print(f"\n❌ 网络连接错误:")
+                print(f"   {error_msg}")
+                print(f"   建议：检查网络连接或稍后重试")
+            else:
+                # Generic error
+                print(f"\n❌ 发生错误 ({error_type}):")
+                print(f"   {error_msg}")
+
+            # Always log full error details
             log_error(self.logger, e, context="handle_user_message - app.astream()")
-            print("请查看日志文件获取详细信息\n")
+            print(f"\n详细信息已记录到日志: {self.logger.handlers[0].baseFilename if self.logger.handlers else 'N/A'}\n")
 
     # ========== Custom Command Handlers ==========
 
@@ -279,16 +355,18 @@ class GeneralAgentCLI(BaseCLI):
         return True
 
     async def _handle_reset(self, arg: str) -> bool:
-        """Override reset to clear printed_tool_ids."""
+        """Override reset to clear printed IDs."""
         result = await super()._handle_reset(arg)
         self.printed_tool_ids.clear()
+        self.printed_message_ids.clear()
         return result
 
     async def _handle_load(self, session_id_prefix: str) -> bool:
-        """Override load to clear printed_tool_ids."""
+        """Override load to clear printed IDs."""
         result = await super()._handle_load(session_id_prefix)
         if result:
             self.printed_tool_ids.clear()
+            self.printed_message_ids.clear()
         return result
 
     # ========== Cleanup ==========
@@ -306,10 +384,112 @@ class GeneralAgentCLI(BaseCLI):
         except Exception as e:
             self.logger.warning(f"Cleanup failed on exit: {e}")
 
+    # ========== HITL Interrupt Handling ==========
+
+    async def _handle_interrupt(self, interrupt_data: dict):
+        """Handle interrupt events (HITL core logic).
+
+        Args:
+            interrupt_data: Interrupt data from LangGraph
+
+        Returns:
+            Resume value or None if user cancels
+        """
+        interrupt_type = interrupt_data.get("type", "generic")
+
+        if interrupt_type == "user_input_request":
+            return await self._handle_user_input_request(interrupt_data)
+        elif interrupt_type == "tool_approval":
+            return await self._handle_tool_approval(interrupt_data)
+        else:
+            # Generic interrupt handling
+            self.logger.warning(f"Unknown interrupt type: {interrupt_type}")
+            return None
+
+    async def _handle_user_input_request(self, data: dict) -> str:
+        """Handle ask_human tool request (极简版 UI).
+
+        Args:
+            data: Request data with question, context, etc.
+
+        Returns:
+            User's answer or None if cancelled
+        """
+        question = data.get("question", "")
+        context = data.get("context", "")
+        default = data.get("default")
+        required = data.get("required", True)
+
+        # Print question (极简版)
+        print()
+        if context:
+            print(f"💡 {context}")
+        print(f"💬 {question}")
+        if default:
+            print(f"   (默认: {default})")
+
+        # Get user input
+        loop = asyncio.get_event_loop()
+        answer = await loop.run_in_executor(None, lambda: input("> ").strip())
+
+        # Handle empty answer
+        if not answer:
+            if default:
+                print(f"✓ 使用默认值: {default}")
+                return default
+            if required:
+                print("⚠️  必须回答此问题")
+                return await self._handle_user_input_request(data)  # Retry
+
+        return answer
+
+    async def _handle_tool_approval(self, data: dict) -> str:
+        """Handle tool approval request (极简版 UI).
+
+        Args:
+            data: Approval request data
+
+        Returns:
+            "approve" or "reject"
+        """
+        tool = data.get("tool", "unknown")
+        args = data.get("args", {})
+        reason = data.get("reason", "")
+        risk_level = data.get("risk_level", "medium")
+
+        # Print approval request (极简版)
+        print()
+        print(f"🛡️  工具审批: {tool}")
+        if reason:
+            print(f"   原因: {reason}")
+        print(f"   参数: {self._format_tool_args(args, max_length=60)}")
+
+        # Get approval decision
+        loop = asyncio.get_event_loop()
+        while True:
+            choice = await loop.run_in_executor(
+                None,
+                lambda: input("   批准? [y/n] > ").strip().lower()
+            )
+
+            if choice in ["y", "yes", "是"]:
+                print("✓ 已批准")
+                return "approve"
+            elif choice in ["n", "no", "否"]:
+                print("✗ 已拒绝")
+                return "reject"
+            else:
+                print("   请输入 y 或 n")
+
     # ========== Helper Methods ==========
 
     async def _print_message(self, msg: BaseMessage):
         """Print a single message with appropriate formatting."""
+        # Check if message already printed (avoid duplicates during interrupt/resume)
+        msg_id = getattr(msg, "id", None)
+        if msg_id and msg_id in self.printed_message_ids:
+            return
+
         role, text = self._role_and_text(msg)
 
         # Print tool calls if present (before text content)
@@ -322,17 +502,25 @@ class GeneralAgentCLI(BaseCLI):
                 print(f">> [call] {tool_name}({args_str})")
 
         if not text:
+            # Mark as printed even if no text (to avoid reprinting tool_calls)
+            if msg_id:
+                self.printed_message_ids.add(msg_id)
             return
 
         if role in {"assistant", "ai"}:
             print(f"Agent> {text}")
         elif role == "tool":
+            # Keep old tool_id tracking for backward compatibility
             tool_id = getattr(msg, "id", None)
             if tool_id and tool_id in self.printed_tool_ids:
                 return
             if tool_id:
                 self.printed_tool_ids.add(tool_id)
             print(f"<< [result] {text}")
+
+        # Mark message as printed
+        if msg_id:
+            self.printed_message_ids.add(msg_id)
 
     @staticmethod
     def _format_tool_args(args: dict, max_length: int = 80) -> str:

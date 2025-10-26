@@ -1,0 +1,127 @@
+# HITL (Human-in-the-Loop) 审批规则配置
+#
+# 此文件定义了哪些工具操作需要用户审批
+# 支持细粒度控制：根据工具参数内容决定是否需要审批
+
+global:
+  # 是否启用审批功能（可以全局关闭）
+  enabled: true
+
+  # 默认行为（当工具未在下面配置时）
+  # - allow: 允许执行
+  # - ask: 询问用户
+  # - deny: 拒绝执行
+  default_action: allow
+
+  # 全局风险模式（适用于所有工具的跨工具检测）
+  # 这些模式会在工具特定规则之前检查
+  risk_patterns:
+    # 严重风险：敏感信息泄露
+    critical:
+      patterns:
+        - "password\\s*[=:]\\s*['\"]?[\\w.-]+"       # 密码明文 (key=value)
+        - ":\\s*password\\w+"                        # URL 中的密码 (user:password)
+        - "api[_-]?key\\s*[=:]\\s*['\"]?[\\w-]+"     # API Key
+        - "secret\\s*[=:]\\s*['\"]?[\\w.-]+"         # Secret
+        - "token\\s*[=:]\\s*['\"]?[\\w.-]+"          # Token
+        - "private[_-]?key"                          # 私钥
+        - "BEGIN (RSA|DSA|EC) PRIVATE KEY"           # PEM 格式私钥
+      action: require_approval
+      reason: "检测到敏感信息（密码/密钥/令牌）"
+
+    # 高风险：系统敏感文件或危险操作
+    high:
+      patterns:
+        - "/etc/passwd"                              # 系统用户文件
+        - "/etc/shadow"                              # 系统密码文件
+        - "~/.ssh/id_rsa"                           # SSH 私钥
+        - "~/.aws/credentials"                       # AWS 凭证
+        - "\\.pem$"                                  # PEM 证书文件
+        - "DROP\\s+(TABLE|DATABASE)"                 # SQL 删除表/库
+        - "DELETE\\s+FROM.*WHERE\\s+1=1"            # SQL 删除所有记录
+        - "TRUNCATE\\s+TABLE"                        # SQL 清空表
+      action: require_approval
+      reason: "检测到高风险操作（系统文件/数据库删除）"
+
+    # 中等风险：可疑模式
+    medium:
+      patterns:
+        - "https?://[^/]*\\d+\\.\\d+\\.\\d+\\.\\d+" # IP 地址 URL
+        - "\\bexec\\s*\\("                           # 代码执行
+        - "\\beval\\s*\\("                           # 动态执行
+        - "\\bimport\\s+os\\b"                       # Python os 模块
+        - "\\b__import__\\b"                         # Python 动态导入
+        - "\\.env$"                                  # 环境变量文件
+      action: require_approval
+      reason: "检测到可疑模式（代码执行/环境变量）"
+
+# 工具级别的审批规则
+tools:
+  # Bash 命令执行
+  run_bash_command:
+    enabled: true
+
+    # 风险模式定义
+    patterns:
+      # 高风险操作
+      high_risk:
+        - "rm\\s+-rf"           # 强制删除
+        - "sudo"                # 提权操作
+        - "chmod\\s+777"        # 危险权限
+        - "mkfs"                # 格式化磁盘
+        - "dd.*if=/dev/"        # 磁盘写入
+        - ">/dev/"              # 设备写入
+
+      # 中等风险操作
+      medium_risk:
+        - "curl"                # 网络请求
+        - "wget"                # 下载文件
+        - "git\\s+clone"        # 克隆仓库
+        - "pip\\s+install"      # 安装包
+        - "npm\\s+install"      # 安装包
+        - "docker"              # Docker 操作
+
+    # 每个风险级别的处理动作
+    actions:
+      high_risk: require_approval
+      medium_risk: require_approval
+
+  # HTTP 请求
+  http_fetch:
+    enabled: true
+
+    # 自定义规则（支持正则表达式）
+    rules:
+      - pattern: "localhost"
+        action: require_approval
+        reason: "访问本地服务"
+
+      - pattern: "127\\.0\\.0\\.1"
+        action: require_approval
+        reason: "访问本地地址"
+
+      - pattern: "192\\.168\\."
+        action: require_approval
+        reason: "访问内网地址"
+
+  # 文件操作示例（未来可以启用）
+  # write_file:
+  #   enabled: false
+  #   patterns:
+  #     sensitive_paths:
+  #       - "/etc/"
+  #       - "/sys/"
+  #       - "~/.ssh/"
+  #   actions:
+  #     sensitive_paths: require_approval
+
+# 注意事项:
+# 1. 模式使用正则表达式，需要转义特殊字符（如 \\.）
+# 2. 审批检查顺序（优先级从高到低）：
+#    a. 工具自定义检查器（代码实现）
+#    b. 全局风险模式（global.risk_patterns）
+#    c. 工具特定规则（tools.xxx）
+#    d. 内置默认规则
+# 3. 全局风险模式适用于所有工具，用于跨工具检测（如敏感信息泄露）
+# 4. 工具特定规则仅适用于该工具，提供更精确的控制
+# 5. 可以通过设置 enabled: false 临时禁用某个工具的审批

@@ -10,6 +10,7 @@ from generalAgent import graph
 from generalAgent.agents import ModelResolver
 from generalAgent.config import get_settings
 from generalAgent.config.project_root import resolve_project_path
+from generalAgent.hitl import ApprovalChecker
 from generalAgent.models import build_default_registry
 from generalAgent.persistence import build_checkpointer
 from generalAgent.skills import SkillRegistry
@@ -161,6 +162,11 @@ async def build_application(
 
     resolver = model_resolver or build_model_resolver(model_configs)
 
+    # Initialize HITL approval checker
+    hitl_config_path = resolve_project_path("generalAgent/config/hitl_rules.yaml")
+    approval_checker = ApprovalChecker(config_path=hitl_config_path)
+    LOGGER.info(f"HITL approval checker initialized with config: {hitl_config_path}")
+
     app = graph.build_state_graph(
         model_registry=model_registry,
         model_resolver=resolver,
@@ -169,6 +175,7 @@ async def build_application(
         skill_registry=skill_registry,
         settings=settings,
         checkpointer=checkpointer,
+        approval_checker=approval_checker,
     )
 
     # Set app graph for call_subagent tool

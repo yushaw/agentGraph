@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Dict, List
 
 from langgraph.graph import StateGraph, START, END
-from langgraph.prebuilt import ToolNode
 
 from generalAgent.agents import ModelResolver
 from generalAgent.graph.nodes import (
@@ -17,6 +16,7 @@ from generalAgent.graph.routing import (
     tools_route,
 )
 from generalAgent.graph.state import AppState
+from generalAgent.hitl import ApprovalToolNode
 from generalAgent.models import ModelRegistry
 from generalAgent.tools import ToolRegistry
 
@@ -30,6 +30,7 @@ def build_state_graph(
     skill_registry,
     settings,
     checkpointer=None,
+    approval_checker=None,  # HITL: 审批检测器（可选）
 ):
     """Compose the agent graph with Agent Loop architecture (Claude Code style).
 
@@ -73,7 +74,20 @@ def build_state_graph(
 
     # Add nodes
     graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(tool_registry.list_tools()))
+
+    # Tools node with optional approval
+    if approval_checker:
+        tools_node = ApprovalToolNode(
+            tools=tool_registry.list_tools(),
+            approval_checker=approval_checker,
+            enable_approval=True,
+        )
+    else:
+        # Fallback: 如果没有提供 approval_checker，使用原来的 ToolNode
+        from langgraph.prebuilt import ToolNode
+        tools_node = ToolNode(tool_registry.list_tools())
+
+    graph.add_node("tools", tools_node)
     graph.add_node("finalize", finalize_node)
 
     # ========== Agent Loop ==========

@@ -43,6 +43,11 @@ core:
     tags: ["file", "edit", "write"]
     description: "Edit files with precise string replacement (safer than write_file)"
 
+  ask_human:
+    category: "hitl"
+    tags: ["hitl", "interaction", "user"]
+    description: "Ask user for input when additional information is needed"
+
   run_bash_command:
     enabled: false
     always_available: false

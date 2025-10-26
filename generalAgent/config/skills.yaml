@@ -1,0 +1,31 @@
+# Skills Configuration
+# Controls which skills are available to the agent
+
+# Global settings
+global:
+  # 是否启用 skills 系统
+  enabled: true
+
+  # 上传文件时自动加载对应 skill
+  auto_load_on_file_upload: true
+
+# Core skills - Always loaded at startup
+core: []  # 默认没有核心 skills
+
+# Optional skills - Can be enabled/disabled via @mention or file upload
+optional:
+  pdf:
+    enabled: false  # 默认不加载（需要 @pdf 或上传 PDF 文件）
+    always_available: false
+    description: "PDF processing and form filling"
+    auto_load_on_file_types: ["pdf"]  # 上传 PDF 时自动加载
+
+  # excel:
+  #   enabled: false
+  #   always_available: false
+  #   description: "Excel file processing"
+  #   auto_load_on_file_types: ["xlsx", "xls", "csv"]
+
+# Skills directories
+directories:
+  builtin: "generalAgent/skills"

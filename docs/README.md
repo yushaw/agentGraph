@@ -133,6 +133,56 @@
   - J2. 优雅降级（Graceful Degradation）
   - J3. 循环限制与死锁检测
 
+### Part 5: MCP (Model Context Protocol) 集成
+**文件**: `REQUIREMENTS_PART5_MCP.md`
+
+包含内容：
+- **核心架构**
+  - MCP 分层架构（Connection → Manager → Wrapper）
+  - 延迟启动机制
+  - 双协议支持（stdio/SSE）
+- **配置系统**
+  - mcp_servers.yaml 配置详解
+  - 环境变量替换
+  - 工具命名策略（alias/prefix）
+- **实现细节**
+  - 启动流程
+  - 工具注册流程
+  - 优雅关闭机制
+- **使用指南**
+  - 快速开始
+  - 添加官方 MCP 服务器
+  - 高级配置
+- **测试与验证**
+  - 测试基础设施
+  - 运行测试
+  - 验证清单
+
+### Part 6: HITL (Human-in-the-Loop) 机制
+**文件**: `REQUIREMENTS_PART6_HITL.md`
+
+包含内容：
+- **两种 HITL 模式**
+  - ask_human 工具（Agent 主动交互）
+  - Tool Approval Framework（系统级安全）
+- **核心架构**
+  - LangGraph interrupt() 机制
+  - ApprovalToolNode 包装器
+  - 三层审批规则系统
+- **实现细节**
+  - ask_human 工具实现
+  - ApprovalChecker 规则系统
+  - Graph 集成方式
+  - 极简版 UI 提示
+- **使用指南**
+  - ask_human 使用示例
+  - Tool Approval 配置示例
+  - 自定义检查器
+- **配置与扩展**
+  - hitl_rules.yaml 配置
+  - 扩展 ask_human（choice/multi_choice）
+  - 审批日志
+
 ## 文档特点
 
 每个需求都包含：
@@ -155,9 +205,12 @@
 
 ## 文档维护
 
-- **版本**: 2025-01-24
-- **生成方式**: 基于实际代码和设计文档自动生成
+- **版本**: 2025-10-26
+- **生成方式**: 基于实际代码和设计文档生成
 - **更新频率**: 重大架构变更时更新
+- **最近更新**:
+  - 2025-10-26: 新增 Part 5 (MCP 集成) 和 Part 6 (HITL 机制)
+  - 2025-01-24: 初始版本 (Part 1-4)
 
 ## 相关文档
 
