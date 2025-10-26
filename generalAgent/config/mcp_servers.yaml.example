@@ -1,0 +1,94 @@
+# MCP Servers Configuration Example
+# Copy this file to mcp_servers.yaml and customize for your setup
+
+servers:
+  # Test stdio server (for development/testing)
+  test_stdio:
+    command: "python"
+    args: ["tests/mcp_servers/test_stdio_server.py"]
+    enabled: true
+    env: {}
+
+    tools:
+      echo:
+        enabled: true
+        always_available: false
+        alias: "mcp_echo"
+        description: "Echo back a message"
+
+      add:
+        enabled: true
+        always_available: false
+        alias: "mcp_add"
+        description: "Add two numbers"
+
+      get_time:
+        enabled: true
+        always_available: false
+        alias: "mcp_time"
+        description: "Get current server time"
+
+  # Official filesystem server (requires npm/npx)
+  # filesystem:
+  #   command: "npx"
+  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/Users/yushaw"]
+  #   enabled: false
+  #   env: {}
+  #
+  #   tools:
+  #     read_file:
+  #       enabled: true
+  #       always_available: false
+  #       alias: "mcp_read_file"
+  #       description: "Read file contents from filesystem"
+  #
+  #     write_file:
+  #       enabled: true
+  #       always_available: false
+  #       alias: "mcp_write_file"
+  #       description: "Write content to file"
+  #
+  #     list_directory:
+  #       enabled: true
+  #       always_available: false
+  #       alias: "mcp_ls"
+  #       description: "List directory contents"
+
+  # Official GitHub server (requires GITHUB_TOKEN)
+  # github:
+  #   command: "npx"
+  #   args: ["-y", "@modelcontextprotocol/server-github"]
+  #   enabled: false
+  #   env:
+  #     GITHUB_TOKEN: "${GITHUB_TOKEN}"  # Will be read from environment
+  #
+  #   tools:
+  #     create_issue:
+  #       enabled: true
+  #       always_available: false
+  #       alias: "gh_create_issue"
+  #       description: "Create a GitHub issue"
+  #
+  #     list_prs:
+  #       enabled: true
+  #       always_available: false
+  #       alias: "gh_list_prs"
+  #       description: "List pull requests"
+
+# Global settings
+settings:
+  # Lazy start: only start server on first tool call (recommended)
+  lazy_start: true
+
+  # Namespace strategy for tool names
+  # - "prefix": mcp__server__tool (safe, no conflicts)
+  # - "alias": use configured alias (cleaner names)
+  namespace_strategy: "alias"
+
+  # Server startup timeout (seconds)
+  startup_timeout: 30
+
+  # Default connection mode
+  # - "stdio": Standard input/output (default)
+  # - "sse": Server-Sent Events over HTTP
+  default_connection_mode: "stdio"

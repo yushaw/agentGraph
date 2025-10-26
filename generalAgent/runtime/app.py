@@ -32,11 +32,18 @@ def _create_skill_registry(skills_root: Path) -> SkillRegistry:
     return SkillRegistry(skills_root)
 
 
-def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, List]:
+def _create_tool_registry(skill_registry: SkillRegistry, mcp_tools: Optional[List] = None) -> tuple[ToolRegistry, List]:
     """Create tool registry using scanner and configuration.
 
     NEW: Uses automatic scanning and tools.yaml configuration instead of
     hardcoded tool imports. This enables hot-reload and plugin support.
+
+    Args:
+        skill_registry: Skill registry instance
+        mcp_tools: Optional list of MCP tools to register
+
+    Returns:
+        (ToolRegistry, persistent_tools) tuple
     """
     registry = ToolRegistry()
 
@@ -69,6 +76,14 @@ def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, 
 
     LOGGER.info(f"  - Registered {registered_count} tools from scan")
 
+    # Register MCP tools (if provided)
+    if mcp_tools:
+        for mcp_tool in mcp_tools:
+            registry.register_tool(mcp_tool)
+            # Also register as discovered for @mention support
+            registry.register_discovered(mcp_tool)
+        LOGGER.info(f"  - Registered {len(mcp_tools)} MCP tools")
+
     # Register skill tools
     skill_tools = build_skill_tools(skill_registry)
     for skill_tool in skill_tools:
@@ -95,17 +110,33 @@ def _create_tool_registry(skill_registry: SkillRegistry) -> tuple[ToolRegistry, 
             except KeyError:
                 LOGGER.warning(f"Tool '{tool_name}' configured but not found")
 
+    # Add MCP tools that are always_available
+    if mcp_tools:
+        for mcp_tool in mcp_tools:
+            if getattr(mcp_tool, "always_available", False):
+                persistent.append(mcp_tool)
+
     LOGGER.info(f"  - Persistent tools: {[t.name for t in persistent]}")
 
     return registry, persistent
 
 
-def build_application(
+async def build_application(
     *,
     model_resolver: Optional[ModelResolver] = None,
     skills_root: Optional[Path] = None,
+    mcp_tools: Optional[List] = None,
 ):
-    """Return a compiled LangGraph application instance."""
+    """Return a compiled LangGraph application instance.
+
+    Args:
+        model_resolver: Optional custom model resolver
+        skills_root: Optional custom skills directory
+        mcp_tools: Optional list of MCP tools to register
+
+    Returns:
+        (app, initial_state_factory, skill_registry, tool_registry) tuple
+    """
 
     settings = get_settings()
     configure_tracing(settings.observability)
@@ -118,7 +149,7 @@ def build_application(
     skills_root = skills_root or resolve_project_path("generalAgent/skills")
     skill_registry = _create_skill_registry(skills_root)
 
-    tool_registry, persistent_global_tools = _create_tool_registry(skill_registry)
+    tool_registry, persistent_global_tools = _create_tool_registry(skill_registry, mcp_tools)
 
     max_loops = settings.governance.max_loops
 
@@ -161,6 +192,7 @@ def build_application(
             "thread_id": None,
             "user_id": None,
             "workspace_path": None,  # Set by main.py when session starts
+            "uploaded_files": [],  # Track uploaded files
         }
 
     return app, initial_state, skill_registry, tool_registry

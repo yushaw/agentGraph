@@ -9,6 +9,7 @@ An opinionated LangGraph-based architecture for building various types of agents
 - **Model registry & routing** – register five core model classes (base, reasoning, vision, code, chat) and pick the right model per phase (`plan`, `decompose`, `delegate`, etc.).
 - **Skill packages** – discoverable `skills/<id>/SKILL.yaml` descriptors with progressive disclosure and tool allowlists.
 - **Governed tool runtime** – declarative metadata (`ToolMeta`) for risk tagging, global read-only utilities, and skill-scoped business tools.
+- **MCP Integration** ⭐ NEW – Model Context Protocol support with lazy server startup, manual tool control, and stdio/SSE modes. [Quick Start](docs/MCP_QUICKSTART.md) | [Full Guide](docs/MCP_INTEGRATION.md)
 - **LangGraph flow** – `plan → guard → tools → post → (decompose|delegate) → guard → tools → after → …` with deliverable verification and budgets.
 - **Delegation loop** – decomposition into structured plans, delegated subagents with scoped tools, and per-step verification.
 - **Observability hooks** – optional LangSmith tracing + Postgres checkpointer.

@@ -8,6 +8,8 @@ wheels/
 
 # Virtual environments
 .venv
+venv/
+env/
 
 # Runtime artifacts
 logs/
@@ -16,7 +18,23 @@ data/
 *.sqlite
 *.log
 
+# MCP specific
+generalAgent/config/mcp_servers.yaml
+# Keep the example file:
+!generalAgent/config/mcp_servers.yaml.example
+
+# Pytest cache
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
 # Local tooling
 .DS_Store
 .vscode/
 .idea/
+
+# Temporary files
+*.tmp
+*.swp
+*~
