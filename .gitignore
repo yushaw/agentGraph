@@ -18,6 +18,10 @@ data/
 *.sqlite
 *.log
 
+# Document search indexes (global, auto-generated)
+data/indexes/
+*.index.json
+
 # MCP specific
 generalAgent/config/mcp_servers.yaml
 # Keep the example file:

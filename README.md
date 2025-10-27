@@ -278,5 +278,47 @@ For detailed testing guidelines and best practices, see [docs/TESTING_GUIDE.md](
 
 ## Changelog
 
+### 2025-10-27 - Document Reading and Search Support
+
+**New Features:**
+- **Document Reading**: Enhanced `read_file` to support PDF, DOCX, XLSX, PPTX documents
+  - Automatic format detection with preview limits
+  - Small files (≤10 pages): Full content extraction
+  - Large files: Preview with search hints (PDF: 10 pages, DOCX: 10 pages, XLSX: 3 sheets, PPTX: 15 slides)
+- **File Finding**: Added `find_files` tool for fast file name pattern matching
+  - Glob pattern support (`*.pdf`, `**/*.py`, `*report*`, `*.{pdf,docx}`)
+  - Follows Unix philosophy (single responsibility)
+- **Content Search**: Added `search_file` tool for searching within files
+  - Text files: Real-time line-by-line scanning with context
+  - Documents: Index-based search with automatic indexing
+  - Multi-strategy scoring: phrase (10 pts) > trigrams (5 pts) > bigrams (3 pts) > keywords (2 pts)
+
+**Infrastructure:**
+- Created `generalAgent/utils/document_extractors.py` for unified document content extraction
+- Created `generalAgent/utils/text_indexer.py` for global MD5-based indexing system
+  - Two-level directory structure in `data/indexes/`
+  - Automatic staleness detection (24-hour threshold)
+  - Cross-session index deduplication
+
+**Configuration:**
+- Added `DocumentSettings` to `generalAgent/config/settings.py` for document processing parameters
+- Updated `tools.yaml` to register new tools
+- Updated `.gitignore` to exclude generated indexes
+
+**Dependencies:**
+- Added `python-docx>=1.1.0` for DOCX processing
+- Added `openpyxl>=3.1.2` for XLSX processing
+- Added `python-pptx>=0.6.23` for PPTX processing
+- Added `pdfplumber>=0.11.0` for PDF processing (already in dependencies)
+
+**Testing:**
+- Created `tests/unit/test_document_extractors.py` - Document extraction tests
+- Created `tests/unit/test_text_indexer.py` - Indexing and search tests
+- Created `tests/unit/test_find_search_tools.py` - Tool integration tests
+
+**Documentation:**
+- Updated `CLAUDE.md` with comprehensive tool usage guide and examples
+- Added tool selection guide for optimal usage
+
 For detailed version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
 

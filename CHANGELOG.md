@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2025-10-27) - Document Reading and Search Support
+
+**New Features:**
+- **Document Reading**: Enhanced `read_file` to support PDF, DOCX, XLSX, PPTX documents
+  - Automatic format detection with preview limits
+  - Small files (≤10 pages): Full content extraction
+  - Large files: Preview with search hints (PDF: 10 pages, DOCX: 10 pages, XLSX: 3 sheets, PPTX: 15 slides)
+- **File Finding**: Added `find_files` tool for fast file name pattern matching
+  - Glob pattern support (`*.pdf`, `**/*.py`, `*report*`, `*.{pdf,docx}`)
+  - Follows Unix philosophy (single responsibility)
+- **Content Search**: Added `search_file` tool for searching within files
+  - Text files: Real-time line-by-line scanning with context
+  - Documents: Index-based search with automatic indexing
+  - Multi-strategy scoring: phrase (10 pts) > trigrams (5 pts) > bigrams (3 pts) > keywords (2 pts)
+
+**Infrastructure:**
+- Created `generalAgent/utils/document_extractors.py` for unified document content extraction
+- Created `generalAgent/utils/text_indexer.py` for global MD5-based indexing system
+  - Two-level directory structure in `data/indexes/`
+  - Automatic staleness detection (24-hour threshold)
+  - Cross-session index deduplication
+  - **Orphan index cleanup**: Automatically handles same-name file replacement
+  - `cleanup_old_indexes_for_file()` - Cleans old indexes when creating new ones
+  - Enhanced `cleanup_old_indexes()` - Detects and removes orphan indexes
+
+**Configuration:**
+- Added `DocumentSettings` to `generalAgent/config/settings.py` for document processing parameters
+- Updated `generalAgent/config/tools.yaml` to register new tools (find_files, search_file)
+- Updated `.gitignore` to exclude generated indexes
+
+**Dependencies:**
+- Added `python-docx>=1.1.0` for DOCX processing
+- Added `openpyxl>=3.1.2` for XLSX processing
+- Added `python-pptx>=0.6.23` for PPTX processing
+- Added `pdfplumber>=0.11.0` for PDF processing (already in dependencies)
+
+**Testing:**
+- Created `tests/unit/test_document_extractors.py` - Document extraction tests (27 tests)
+- Created `tests/unit/test_text_indexer.py` - Indexing and search tests (20 tests)
+- Created `tests/unit/test_find_search_tools.py` - Tool integration tests (25 tests)
+
+**Documentation:**
+- Updated `CLAUDE.md` with comprehensive tool usage guide and examples
+- Added tool selection guide for optimal usage
+- Updated README.md with detailed feature summary
+
+**Files Modified:**
+- `generalAgent/tools/builtin/file_ops.py` - Enhanced read_file for documents
+- `generalAgent/config/settings.py` - Added DocumentSettings
+- `generalAgent/config/tools.yaml` - Registered new tools
+- `.gitignore` - Exclude data/indexes/
+- `CLAUDE.md` - Added File Operation Tools section
+- `README.md` - Added changelog entry
+
+**Files Created:**
+- `generalAgent/tools/builtin/find_files.py` (146 lines)
+- `generalAgent/tools/builtin/search_file.py` (237 lines)
+- `generalAgent/utils/document_extractors.py` (486 lines)
+- `generalAgent/utils/text_indexer.py` (380 lines)
+- `tests/unit/test_document_extractors.py` (310 lines)
+- `tests/unit/test_text_indexer.py` (390 lines)
+- `tests/unit/test_find_search_tools.py` (330 lines)
+
 ### Added (2025-10-27) - E2E Testing Expansion
 
 **New Test Suites**: Added 13 comprehensive E2E test scenarios (+92.9% test coverage)

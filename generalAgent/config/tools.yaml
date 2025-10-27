@@ -38,6 +38,16 @@ core:
     tags: ["file", "list"]
     description: "List files in workspace directory"
 
+  find_files:
+    category: "file"
+    tags: ["file", "search", "glob"]
+    description: "Find files by name pattern (glob-based, fast)"
+
+  search_file:
+    category: "file"
+    tags: ["file", "search", "content"]
+    description: "Search for content within files (text and documents)"
+
   edit_file:
     category: "file"
     tags: ["file", "edit", "write"]

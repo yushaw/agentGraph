@@ -264,7 +264,11 @@ START → agent ⇄ tools → agent → finalize → END
 - `generalAgent/persistence/session_store.py` - SQLite session persistence
 - `generalAgent/persistence/workspace.py` - Workspace manager for session isolation
 - `generalAgent/tools/builtin/file_ops.py` - File operation tools (read_file, write_file, list_workspace_files)
+- `generalAgent/tools/builtin/find_files.py` - File name search tool (glob-based)
+- `generalAgent/tools/builtin/search_file.py` - Content search tool (text and documents)
 - `generalAgent/tools/builtin/run_bash_command.py` - Execute bash commands and skill scripts
+- `generalAgent/utils/document_extractors.py` - Document content extraction (PDF/DOCX/XLSX/PPTX)
+- `generalAgent/utils/text_indexer.py` - Global MD5-based indexing and search
 - `main.py` - CLI entrypoint with streaming, @mention parsing, session/workspace management
 
 ## Workspace Isolation
@@ -304,11 +308,64 @@ data/workspace/{session_id}/
 
 ### File Operation Tools
 
-**read_file**
+The agent has access to a comprehensive set of file operation tools following the Unix philosophy (single responsibility principle).
+
+**read_file** - Read file content with automatic format detection
 ```python
-read_file("skills/pdf/SKILL.md")  # Read skill documentation
-read_file("uploads/document.pdf")  # Read user upload
+read_file("skills/pdf/SKILL.md")      # Read skill documentation
+read_file("uploads/document.pdf")     # Read PDF preview
+read_file("uploads/report.docx")      # Read DOCX preview
+read_file("uploads/data.xlsx")        # Read Excel preview
+read_file("uploads/slides.pptx")      # Read PowerPoint preview
 ```
+
+**Supported formats:**
+- **Text files** (<100KB): Full content
+- **Text files** (>100KB): First 50K chars with truncation notice
+- **Documents** (PDF/DOCX/XLSX/PPTX):
+  - Small files (≤10 pages/sheets/slides): Full content
+  - Large files: Preview with search hint
+  - PDF/DOCX: First 10 pages (~30K chars)
+  - XLSX: First 3 sheets (~20K chars)
+  - PPTX: First 15 slides (~25K chars)
+
+**find_files** - Fast file name pattern matching (like Unix find/glob)
+```python
+find_files("*.pdf")                      # All PDFs in workspace
+find_files("**/*.py")                    # All Python files recursively
+find_files("*report*", path="uploads")   # Files with "report" in name
+find_files("*.{pdf,docx}")               # Multiple extensions
+```
+
+**search_file** - Search for content within files
+```python
+search_file("uploads/report.pdf", "Q3 revenue")           # Search in PDF
+search_file("uploads/error.log", "ERROR", max_results=10) # Search in text
+search_file("uploads/data.xlsx", "customer churn")        # Search in Excel
+```
+
+**Search strategies:**
+- **Text files**: Real-time line-by-line scanning with context
+- **Documents**: Index-based search with automatic indexing
+  - First search creates index (2-5 seconds)
+  - Subsequent searches are instant (<100ms)
+  - Multi-strategy scoring: phrase match (10 pts) > trigrams (5 pts) > bigrams (3 pts) > keywords (2 pts)
+  - Global MD5-based index cache in `data/indexes/`
+
+**Document indexing details:**
+- Indexes stored globally in `data/indexes/` with two-level directory structure
+- MD5-based deduplication across sessions
+- Automatic staleness detection and reindexing (24-hour threshold)
+- **Orphan index cleanup**: When same-name file is replaced (different MD5), old index is automatically deleted
+- **Index update strategy**:
+  - Same content, different path → Use same index (efficient)
+  - Same path, different content → Create new index, delete old (automatic)
+  - File deleted → Index cleaned on next `cleanup_old_indexes()` call
+- Chunking strategies:
+  - PDF: By page (preserves table extraction)
+  - DOCX: By paragraph (~1000 chars, maintains readability)
+  - XLSX: By sheet (logical units)
+  - PPTX: By slide
 
 **write_file**
 ```python
@@ -330,6 +387,12 @@ run_bash_command("python skills/pdf/scripts/fill_fillable_fields.py uploads/form
 # Or with complex commands
 run_bash_command("python skills/pdf/scripts/extract_form_field_info.py uploads/form.pdf outputs/fields.json")
 ```
+
+**Tool selection guide:**
+- Use `find_files` when: Looking for files by name/pattern
+- Use `read_file` when: Want to see document content/preview
+- Use `search_file` when: Looking for specific keywords or information within a file
+- For large documents: Always prefer `search_file` over `read_file` for finding specific content
 
 ## HITL (Human-in-the-Loop)
 

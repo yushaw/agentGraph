@@ -181,13 +181,48 @@ class ObservabilitySettings(BaseSettings):
     )
 
 
+class DocumentSettings(BaseModel):
+    """Document extraction and search configuration.
+
+    These settings control how documents (PDF/DOCX/XLSX/PPTX) are read,
+    extracted, and indexed for search.
+    """
+
+    # Text file limits
+    text_file_max_size: int = 100_000  # 100KB - full read threshold
+    text_preview_chars: int = 50_000   # 50K chars - preview size for large text files
+
+    # PDF preview limits
+    pdf_preview_pages: int = 10
+    pdf_preview_chars: int = 30_000
+
+    # DOCX preview limits
+    docx_preview_pages: int = 10
+    docx_preview_chars: int = 30_000
+
+    # XLSX preview limits
+    xlsx_preview_sheets: int = 3
+    xlsx_preview_chars: int = 20_000
+
+    # PPTX preview limits
+    pptx_preview_slides: int = 15
+    pptx_preview_chars: int = 25_000
+
+    # Search settings
+    search_max_results_default: int = 5
+
+    # Index settings
+    index_stale_threshold_hours: int = 24  # Rebuild index if file modified within 24h
+
+
 class Settings(BaseSettings):
     """Root application settings loaded from .env file.
 
-    Hierarchical structure containing three nested settings groups:
+    Hierarchical structure containing four nested settings groups:
     - models: Model routing and API credentials (ModelRoutingSettings)
     - governance: Agent behavior controls (GovernanceSettings)
     - observability: Tracing and logging (ObservabilitySettings)
+    - documents: Document processing settings (DocumentSettings)
 
     All values are automatically loaded from .env via Pydantic BaseSettings.
     Use get_settings() to obtain a cached singleton instance.
@@ -197,6 +232,7 @@ class Settings(BaseSettings):
     models: ModelRoutingSettings = Field(default_factory=ModelRoutingSettings)
     governance: GovernanceSettings = Field(default_factory=GovernanceSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
     model_config = SettingsConfigDict(
         env_file=".env",

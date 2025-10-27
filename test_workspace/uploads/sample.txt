@@ -1,0 +1,6 @@
+This is a sample text file for testing.
+It contains multiple lines with different content.
+We can search for keywords like revenue and growth.
+Q3 revenue increased by 25% compared to last quarter.
+Customer satisfaction scores improved significantly.
+The quick brown fox jumps over the lazy dog.
