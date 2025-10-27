@@ -296,9 +296,10 @@ For detailed testing guidelines and best practices, see [docs/TESTING_GUIDE.md](
 **Infrastructure:**
 - Created `generalAgent/utils/document_extractors.py` for unified document content extraction
 - Created `generalAgent/utils/text_indexer.py` for global MD5-based indexing system
-  - Two-level directory structure in `data/indexes/`
+  - Two-level directory structure in `data/indexes/` (256 subdirectories for performance)
+  - MD5-based content deduplication across sessions
+  - Automatic orphan index cleanup when same-name files are replaced
   - Automatic staleness detection (24-hour threshold)
-  - Cross-session index deduplication
 
 **Configuration:**
 - Added `DocumentSettings` to `generalAgent/config/settings.py` for document processing parameters

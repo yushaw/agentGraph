@@ -25,6 +25,9 @@ tests/
 │   ├── hitl_evaluation_framework.py
 │   ├── test_mcp/                   # MCP 连接和集成
 │   ├── test_file_ops.py           # 文件操作
+│   ├── test_document_extractors.py # 文档提取 (PDF/DOCX/XLSX/PPTX)
+│   ├── test_text_indexer.py       # 文本索引和搜索
+│   ├── test_find_search_tools.py  # 文件查找和内容搜索工具
 │   ├── test_tool_scanner.py       # 工具扫描
 │   ├── test_tool_config.py        # 工具配置
 │   ├── test_workspace_manager.py  # 工作区管理
@@ -104,9 +107,29 @@ pytest tests/smoke/ -v
 - 工具配置加载
 - 工具元数据管理
 
+#### 文档处理模块
+- 文档内容提取 (test_document_extractors.py)
+  - PDF、DOCX、XLSX、PPTX 格式支持
+  - 预览提取（限制长度）
+  - 完整文档提取
+  - 文档分块（用于索引）
+- 文本索引系统 (test_text_indexer.py)
+  - MD5 哈希计算和去重
+  - 索引创建和存储（两级目录结构）
+  - 关键词和 N-gram 提取
+  - 多策略搜索和评分
+  - 孤儿索引清理
+  - 过期索引检测
+- 文件查找和搜索工具 (test_find_search_tools.py)
+  - find_files: glob 模式匹配
+  - read_file: 文本和文档读取
+  - search_file: 内容搜索（文本 + 文档）
+  - 路径安全验证
+  - 错误处理
+
 #### 其他模块
-- 文件操作
-- 工作区管理
+- 基础文件操作 (test_file_ops.py)
+- 工作区管理 (test_workspace_manager.py)
 - 内容清理
 
 **运行方式**:
@@ -184,15 +207,23 @@ pytest tests/integration/test_mention_types.py -v
 
 #### 真实场景
 ```
-场景 1: 文档处理
-用户: "@pdf 帮我填写这个表单"
-流程: 检测@提及 → 加载技能 → 读取PDF → 执行脚本 → 输出文件
+场景 1: 文档读取与搜索
+用户: "帮我找到 uploads/ 目录下所有 PDF 文件，然后搜索包含 revenue 的内容"
+流程: find_files 查找 → 列出匹配文件 → search_file 搜索内容 → 返回结果
 
-场景 2: 代码分析
+场景 2: 大文档处理
+用户: "读取这个 50 页的 PDF 报告"
+流程: read_file 检测大文档 → 返回预览 → 提示使用 search_file → 用户搜索关键词
+
+场景 3: PDF 表单填写
+用户: "@pdf 帮我填写这个表单"
+流程: 检测@提及 → 加载技能 → 读取 PDF → 执行脚本 → 输出文件
+
+场景 4: 代码分析
 用户: "分析 main.py 的复杂度"
 流程: 读取文件 → 分析代码 → 生成报告 → 返回总结
 
-场景 3: 任务协作
+场景 5: 任务协作
 用户: "帮我写技术文档"
 流程: ask_human 询问 → 生成大纲 → 征求反馈 → 修改完善
 ```

@@ -329,6 +329,271 @@ async def handle_command(self, command: str):
     # ... other commands
 ```
 
+### 4.6 文档读取与搜索工具
+
+**需求描述**：提供文件查找、读取和内容搜索能力，支持文本文件和文档格式（PDF、DOCX、XLSX、PPTX）。
+
+**核心工具**：
+
+#### find_files - 文件名模式匹配
+```python
+# generalAgent/tools/builtin/find_files.py:30-60
+@tool
+def find_files(
+    pattern: Annotated[str, "Glob pattern (e.g., '*.pdf', '**/*.py', '*report*')"],
+    path: Annotated[str, "Directory to search (default: workspace root)"] = "."
+) -> str:
+    """Find files by name pattern (fast, doesn't read file content)."""
+
+    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_PATH"))
+
+    # Resolve search directory
+    search_dir = resolve_workspace_path(path, workspace_root, must_exist=True)
+
+    # Find matching files
+    matches = list(search_dir.glob(pattern))
+
+    # Filter hidden files and index directories
+    matches = [
+        f for f in matches
+        if not any(part.startswith('.') for part in f.parts)
+        and '.indexes' not in f.parts
+    ]
+
+    # Sort by modification time (newest first)
+    matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+    return format_results(matches)
+```
+
+**特点**：
+- 支持 glob 模式（`*.pdf`, `**/*.txt`, `*report*`）
+- 过滤隐藏文件和索引目录
+- 按修改时间排序
+- 显示文件大小
+
+#### read_file - 文件内容读取（增强版）
+```python
+# generalAgent/tools/builtin/file_ops.py:45-120
+@tool
+def read_file(file_path: str) -> str:
+    """Read file from workspace (text files and documents)"""
+
+    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_PATH"))
+    target_path = resolve_workspace_path(file_path, workspace_root, must_exist=True)
+
+    file_ext = target_path.suffix.lower()
+    settings = get_settings()
+
+    # Strategy 1: Text files
+    if file_ext in TEXT_EXTENSIONS:
+        file_size = target_path.stat().st_size
+
+        if file_size < settings.documents.text_file_max_size:
+            # Read full content
+            with open(target_path, "r", encoding="utf-8") as f:
+                return f.read()
+        else:
+            # Return preview with search hint
+            with open(target_path, "r", encoding="utf-8") as f:
+                preview = f.read(settings.documents.text_preview_chars)
+            return f"{preview}\n\n💡 提示：文件较大，使用 search_file 搜索特定内容"
+
+    # Strategy 2: Document files (PDF, DOCX, XLSX, PPTX)
+    if file_ext in DOCUMENT_EXTENSIONS:
+        doc_info = get_document_info(target_path)
+
+        if doc_info["pages"] <= 10:
+            # Small document: read full content
+            return extract_full_document(target_path)
+        else:
+            # Large document: return preview
+            preview = extract_preview(
+                target_path,
+                max_pages=settings.documents.pdf_preview_pages,
+                max_chars=settings.documents.pdf_preview_chars
+            )
+            return f"{preview}\n\n💡 提示：文档较大，使用 search_file 搜索特定内容"
+```
+
+**文档处理能力**：
+- PDF：使用 pdfplumber 提取文本和表格
+- DOCX：使用 python-docx 提取段落和表格
+- XLSX：使用 openpyxl 读取工作表
+- PPTX：使用 python-pptx 提取幻灯片文本
+
+**长度限制策略**：
+- 文本文件：< 100KB 全量读取，否则预览前 50KB
+- PDF/DOCX：≤ 10 页全量，否则预览前 10 页
+- XLSX：≤ 3 sheets 全量，否则预览前 3 sheets
+- PPTX：≤ 15 slides 全量，否则预览前 15 slides
+
+#### search_file - 内容搜索
+```python
+# generalAgent/tools/builtin/search_file.py:45-120
+@tool
+def search_file(
+    path: Annotated[str, "File path relative to workspace"],
+    query: Annotated[str, "Search keywords or phrase"],
+    max_results: Annotated[int, "Maximum results to return"] = 5
+) -> str:
+    """Search for content in a file (supports text files and documents)."""
+
+    workspace_root = Path(os.environ.get("AGENT_WORKSPACE_PATH"))
+    target_path = resolve_workspace_path(path, workspace_root, must_exist=True)
+
+    file_ext = target_path.suffix.lower()
+
+    # Strategy 1: Text files - Real-time scanning
+    if file_ext in TEXT_EXTENSIONS:
+        return _search_text_file(target_path, query, max_results)
+
+    # Strategy 2: Document files - Index-based search
+    if file_ext in DOCUMENT_EXTENSIONS:
+        return _search_document_file(target_path, query, max_results)
+```
+
+**双策略搜索**：
+
+1. **文本文件**：实时逐行扫描
+   - 不区分大小写
+   - 显示匹配行及前后各 1 行上下文
+   - 高亮匹配文本
+
+2. **文档文件**：基于索引的搜索
+   - 首次搜索自动创建索引（存储在 `data/indexes/`）
+   - 后续搜索秒级响应（0.01s vs 0.04s）
+   - 多策略评分系统：
+     - 短语匹配：+10 分
+     - 三元组匹配：+5 分
+     - 二元组匹配：+3 分
+     - 关键词精确：+2 分
+     - 关键词模糊：+1 分
+     - 覆盖率奖励：+0-2 分
+
+**索引管理**：
+```python
+# generalAgent/utils/text_indexer.py:150-220
+def create_index(file_path: Path) -> Path:
+    """创建文档搜索索引"""
+
+    # Compute MD5 hash
+    file_hash = compute_file_hash(file_path)
+
+    # Check if index exists
+    index_path = get_index_path(file_hash)
+    if index_path.exists():
+        # Update metadata only
+        return index_path
+
+    # Clean up old indexes for same file path (orphan cleanup)
+    cleanup_old_indexes_for_file(file_path, keep_hash=file_hash)
+
+    # Extract and chunk document
+    chunks = chunk_document(file_path)
+
+    # Build index
+    index_data = {
+        "file_path": str(file_path),
+        "file_hash": file_hash,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "chunks": [
+            {
+                "chunk_id": i,
+                "page_num": chunk["page_num"],
+                "text": chunk["text"],
+                "keywords": extract_keywords(chunk["text"]),
+                "bigrams": extract_ngrams(chunk["text"], n=2),
+                "trigrams": extract_ngrams(chunk["text"], n=3)
+            }
+            for i, chunk in enumerate(chunks)
+        ]
+    }
+
+    # Save index
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index_data, f, ensure_ascii=False, indent=2)
+
+    return index_path
+```
+
+**索引存储策略**：
+- **全局存储**：`data/indexes/{hash[:2]}/{hash}.index.json`
+- **两级目录结构**：使用 hash 前两位作为子目录（256 个子目录，避免单目录过多文件）
+- **MD5 去重**：相同内容只创建一次索引（跨会话复用）
+- **孤儿索引清理**：上传同名文件时自动删除旧索引
+- **过期检测**：24 小时未访问的索引标记为 stale
+
+**孤儿索引清理机制**：
+```python
+# generalAgent/utils/text_indexer.py:100-145
+def cleanup_old_indexes_for_file(file_path: Path, keep_hash: str):
+    """清理指定文件路径的旧索引（处理同名文件覆盖场景）
+
+    场景：用户在同一 session 上传同名文件但内容不同（MD5 不同）
+    - 旧索引成为孤儿（file_path 匹配但 hash 不同）
+    - 此函数在创建新索引前自动清理旧索引
+    """
+
+    if not INDEXES_DIR.exists():
+        return 0
+
+    deleted_count = 0
+
+    # Scan all index files
+    for index_file in INDEXES_DIR.rglob("*.index.json"):
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                index_data = json.load(f)
+
+            # Check if index is for same file path but different hash
+            if (index_data.get("file_path") == str(file_path)
+                and index_data.get("file_hash") != keep_hash):
+
+                index_file.unlink()
+                deleted_count += 1
+                LOGGER.info(f"Deleted orphan index: {index_file.name} (replaced by {keep_hash[:8]})")
+
+        except Exception as e:
+            LOGGER.debug(f"Error checking index {index_file}: {e}")
+            continue
+
+    return deleted_count
+```
+
+**配置**：
+```python
+# generalAgent/config/settings.py:115-135
+class DocumentSettings(BaseModel):
+    """Document reading and indexing settings"""
+
+    # Text file limits
+    text_file_max_size: int = 100_000        # 100KB
+    text_preview_chars: int = 50_000         # 50KB preview
+
+    # Document preview limits
+    pdf_preview_pages: int = 10
+    pdf_preview_chars: int = 30_000
+    docx_preview_pages: int = 10
+    docx_preview_chars: int = 30_000
+    xlsx_preview_sheets: int = 3
+    xlsx_preview_chars: int = 20_000
+    pptx_preview_slides: int = 15
+    pptx_preview_chars: int = 25_000
+
+    # Search settings
+    search_max_results_default: int = 5
+    index_stale_threshold_hours: int = 24
+```
+
+**设计考量**：
+- **Unix 哲学**：三个工具各司其职（find/read/search），避免功能混杂
+- **自动索引**：首次搜索时自动创建索引，用户无感知
+- **全局去重**：相同文件跨会话共享索引，节省存储和计算
+- **孤儿清理**：自动处理同名文件覆盖场景，保持索引目录整洁
+- **长度保护**：预览机制防止上下文溢出，引导用户使用搜索工具
+
 ---
 
 ## 5. 会话管理需求

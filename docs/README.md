@@ -203,12 +203,68 @@
 3. **学习技巧**：查阅 Part 4，学习 50+ 实现技巧和设计模式
 4. **代码映射**：每个需求都标注了文件位置，方便查找对应代码
 
+## 其他文档
+
+### 文档读取与搜索功能
+AgentGraph 支持读取和搜索多种文档格式（PDF、DOCX、XLSX、PPTX）。
+
+**核心功能**：
+- **find_files**: 快速文件名模式匹配（glob支持）
+- **read_file**: 自动格式检测的文件读取（支持文档预览）
+- **search_file**: 智能内容搜索（文本实时扫描 + 文档索引搜索）
+
+**实现细节**：
+- `generalAgent/utils/document_extractors.py` - 文档内容提取（PDF/DOCX/XLSX/PPTX）
+- `generalAgent/utils/text_indexer.py` - MD5-based 全局索引系统
+- `generalAgent/tools/builtin/find_files.py` - 文件查找工具
+- `generalAgent/tools/builtin/search_file.py` - 内容搜索工具
+- `generalAgent/config/settings.py` - DocumentSettings 配置
+
+**索引策略**：
+- 全局两级目录结构（`data/indexes/{hash[:2]}/{hash}.index.json`）
+- MD5 去重，避免重复索引
+- 自动孤儿索引清理（同名文件覆盖时）
+- 24小时过期检测
+
+详见: `../CLAUDE.md` - File Operation Tools 章节
+
+### 技能配置管理
+**文件**: `SKILLS_CONFIGURATION.md`
+
+说明技能系统的配置方式，包括：
+- skills.yaml 配置详解
+- 技能启用/禁用策略
+- 文件类型自动加载
+- 技能目录过滤
+
+### 测试指南
+**文件**: `TESTING_GUIDE.md`
+
+包含测试框架使用指南：
+- 四层测试架构（smoke/unit/integration/e2e）
+- 测试运行方式
+- 测试编写规范
+
+**相关文档**:
+- `E2E_TESTING_SOP.md` - E2E 测试标准操作流程
+- `HITL_TESTING_SOP.md` - HITL 功能测试流程
+
+### 上下文管理优化
+**文件**: `CONTEXT_MANAGEMENT.md`
+
+详细说明 KV Cache 优化策略：
+- 固定 SystemMessage 设计
+- 分钟级时间戳
+- 动态 Reminder 移至最后消息
+- 70-90% KV Cache 复用率
+
 ## 文档维护
 
-- **版本**: 2025-10-26
+- **版本**: 2025-10-27
 - **生成方式**: 基于实际代码和设计文档生成
 - **更新频率**: 重大架构变更时更新
 - **最近更新**:
+  - 2025-10-27: 新增文档读取与搜索功能说明
   - 2025-10-26: 新增 Part 5 (MCP 集成) 和 Part 6 (HITL 机制)
   - 2025-01-24: 初始版本 (Part 1-4)
 

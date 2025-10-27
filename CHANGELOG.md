@@ -51,7 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 **Documentation:**
 - Updated `CLAUDE.md` with comprehensive tool usage guide and examples
 - Added tool selection guide for optimal usage
-- Updated README.md with detailed feature summary
+- Updated `README.md` with detailed feature summary
+- Updated `docs/README.md` - Added document reading and search functionality section
+- Updated `docs/REQUIREMENTS_PART2_WORKSPACE.md` - Added section 4.6 with detailed implementation
+- Updated `docs/TESTING_GUIDE.md` - Added document processing module tests to unit test coverage
 
 **Files Modified:**
 - `generalAgent/tools/builtin/file_ops.py` - Enhanced read_file for documents
