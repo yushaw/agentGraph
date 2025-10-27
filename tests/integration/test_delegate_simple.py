@@ -7,7 +7,7 @@ from langchain_core.messages import HumanMessage
 
 async def test_delegate_init():
     print("Building application...")
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
 
     print("Creating initial state...")
     state = initial_state_factory()

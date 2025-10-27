@@ -14,7 +14,7 @@ async def test_scenario_1_simple_calculation():
     print("Scenario 1: @calc 计算一下 (2+3)*5")
     print("="*60)
 
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     state = initial_state_factory()
 
     user_input = "@calc 计算一下 (2+3)*5"
@@ -62,7 +62,7 @@ async def test_scenario_2_on_demand_loading():
     print("Scenario 2: @extract_links (disabled tool, on-demand loading)")
     print("="*60)
 
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     state = initial_state_factory()
 
     user_input = "@extract_links 我想提取链接，虽然这个工具默认是禁用的"
@@ -91,7 +91,7 @@ async def test_scenario_3_skill_mention():
     print("Scenario 3: @pdf 技能提及")
     print("="*60)
 
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     state = initial_state_factory()
 
     user_input = "@pdf 帮我了解如何处理PDF文件"
@@ -129,7 +129,7 @@ async def test_scenario_4_mixed_mentions():
     print("Scenario 4: @calc @pdf @agent 混合提及")
     print("="*60)
 
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     state = initial_state_factory()
 
     user_input = "@calc @pdf @agent 计算一些数据，生成PDF报告，如果需要可以委派任务"
@@ -162,7 +162,7 @@ async def test_scenario_5_todo_functionality():
     print("Scenario 5: TODO 工具测试")
     print("="*60)
 
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     state = initial_state_factory()
 
     user_input = "帮我创建三个待办事项：1. 测试工具 2. 测试技能 3. 提交代码"

@@ -33,7 +33,7 @@ def temp_workspace():
 @pytest.fixture
 async def test_app():
     """创建测试用的 Agent application"""
-    app, initial_state_factory, skill_registry, tool_registry = await build_application()
+    app, initial_state_factory, skill_registry, tool_registry, _ = await build_application()
     return {
         "app": app,
         "initial_state_factory": initial_state_factory,

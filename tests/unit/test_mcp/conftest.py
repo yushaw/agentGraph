@@ -4,6 +4,19 @@ import asyncio
 import pytest
 from pathlib import Path
 
+# Check if MCP SDK is installed
+try:
+    import mcp
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
+# Skip all MCP tests if SDK not installed
+pytestmark = pytest.mark.skipif(
+    not MCP_AVAILABLE,
+    reason="MCP SDK not installed. Install with: pip install mcp"
+)
+
 
 @pytest.fixture(scope="session")
 def event_loop():
