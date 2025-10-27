@@ -99,6 +99,7 @@ def build_planner_node(
         visible_tools: List[BaseTool] = list(persistent_global_tools)
 
         # Process @mentions (tools, skills, agents)
+        # Use ALL mentions (historical) to ensure tools/skills remain available
         mentioned = state.get("mentioned_agents", [])
         grouped_mentions = {"tools": [], "skills": [], "agents": [], "unknown": []}
 
@@ -122,14 +123,14 @@ def build_planner_node(
                     except KeyError:
                         LOGGER.error(f"@{tool_name} load failed")
 
-            # Handle @agent mentions (ensure call_subagent is available)
+            # Handle @agent mentions (ensure delegate_task is available)
             if grouped_mentions['agents']:
                 try:
-                    subagent_tool = tool_registry.get_tool("call_subagent")
-                    if subagent_tool not in visible_tools:
-                        visible_tools.append(subagent_tool)
+                    delegate_tool = tool_registry.get_tool("delegate_task")
+                    if delegate_tool not in visible_tools:
+                        visible_tools.append(delegate_tool)
                 except KeyError:
-                    LOGGER.warning("call_subagent not found")
+                    LOGGER.warning("delegate_task not found")
 
         # Deduplicate
         deduped: List[BaseTool] = []
@@ -141,14 +142,14 @@ def build_planner_node(
             deduped.append(tool)
         visible_tools = deduped
 
-        # ========== Subagent tool filtering ==========
-        # Subagents should NOT have access to call_subagent (prevent nesting)
+        # ========== Delegated agent tool filtering ==========
+        # Delegated agents should NOT have access to delegate_task (prevent nesting)
         context_id = state.get("context_id", "main")
-        is_subagent = context_id != "main" and context_id.startswith("subagent-")
+        is_delegated = context_id != "main" and context_id.startswith("delegate-")
 
-        if is_subagent:
-            # Remove call_subagent from visible tools
-            visible_tools = [t for t in visible_tools if t.name != "call_subagent"]
+        if is_delegated:
+            # Remove delegate_task from visible tools
+            visible_tools = [t for t in visible_tools if t.name != "delegate_task"]
 
         # ========== Detect capabilities needed ==========
         need_code = False
@@ -173,12 +174,19 @@ def build_planner_node(
         # ========== Build dynamic system prompt ==========
         active_skill = state.get("active_skill")
 
+        # For reminder generation: use NEW mentions only (not historical)
+        new_mentions = state.get("new_mentioned_agents", [])
+        new_grouped_mentions = {"tools": [], "skills": [], "agents": [], "unknown": []}
+        if new_mentions:
+            new_classifications = classify_mentions(new_mentions, tool_registry, skill_registry)
+            new_grouped_mentions = group_by_type(new_classifications)
+
         LOGGER.info("Building system prompt...")
         dynamic_reminder = build_dynamic_reminder(
             active_skill=active_skill,
-            mentioned_tools=grouped_mentions.get('tools', []),
-            mentioned_skills=grouped_mentions.get('skills', []),
-            mentioned_agents=grouped_mentions.get('agents', []),
+            mentioned_tools=new_grouped_mentions.get('tools', []),
+            mentioned_skills=new_grouped_mentions.get('skills', []),
+            mentioned_agents=new_grouped_mentions.get('agents', []),
             has_images=has_images,
             has_code=has_code,
         )
@@ -199,21 +207,34 @@ def build_planner_node(
             incomplete = in_progress + pending
 
             if incomplete:
-                # Build concise reminder: current + next only
+                # Build detailed reminder: show ALL tasks grouped by status
                 todo_lines = []
+
+                # Show in_progress task(s)
                 if in_progress:
-                    todo_lines.append(f"当前: {in_progress[0].get('content')}")
+                    for task in in_progress:
+                        priority = task.get('priority', 'medium')
+                        priority_tag = f"[{priority}]" if priority != "medium" else ""
+                        todo_lines.append(f"  [进行中] {task.get('content')} {priority_tag}".strip())
+
+                # Show all pending tasks
                 if pending:
-                    # Show only next task
-                    todo_lines.append(f"下一个: {pending[0].get('content')}")
-                    if len(pending) > 1:
-                        todo_lines.append(f"(还有 {len(pending) - 1} 个待办)")
+                    for task in pending:
+                        priority = task.get('priority', 'medium')
+                        priority_tag = f"[{priority}]" if priority != "medium" else ""
+                        todo_lines.append(f"  [待完成] {task.get('content')} {priority_tag}".strip())
+
+                # Show completed count (don't list all completed to save tokens)
+                completed_summary = f"  (已完成 {len(completed)} 个)" if completed else ""
 
                 # Strong reminder to prevent early stopping
                 todo_reminder = f"""<system_reminder>
-                ⚠️ 任务追踪: {' | '.join(todo_lines)}
-                使用 todo_read 查看所有任务。完成所有任务后再停止！
-                </system_reminder>"""
+⚠️ 任务追踪 ({len(incomplete)} 个未完成):
+{chr(10).join(todo_lines)}
+{completed_summary}
+
+完成所有任务后再停止！
+</system_reminder>"""
                 LOGGER.info(f"  - Todo reminder: {len(incomplete)} incomplete, {len(completed)} completed")
             elif completed:
                 # All tasks completed
@@ -235,12 +256,12 @@ def build_planner_node(
             enabled_skills_count = len(skill_config.get_enabled_skills()) if skill_config else len(skill_registry.list_meta())
             LOGGER.info(f"  - Using MAIN AGENT prompt with {enabled_skills_count} enabled skills")
 
-            # Build file upload reminder if there are uploaded files
+            # Build file upload reminder for NEW uploads only (not historical)
             from generalAgent.utils.file_processor import build_file_upload_reminder
-            uploaded_files = state.get("uploaded_files", [])
+            new_uploaded_files = state.get("new_uploaded_files", [])
             file_upload_reminder = ""
-            if uploaded_files:
-                file_upload_reminder = build_file_upload_reminder(uploaded_files, skill_config)
+            if new_uploaded_files:
+                file_upload_reminder = build_file_upload_reminder(new_uploaded_files, skill_config)
 
             # Collect all dynamic reminders
             reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder] if r]
@@ -297,6 +318,9 @@ def build_planner_node(
         updates = {
             "messages": [output],
             "loops": current_loops + 1,
+            # Clear one-time reminders (used in this turn, no longer needed)
+            "new_uploaded_files": [],  # File upload reminder shown once
+            "new_mentioned_agents": [],  # @mention reminder shown once
         }
 
         log_node_exit(LOGGER, "planner", updates)

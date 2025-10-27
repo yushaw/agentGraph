@@ -121,7 +121,7 @@ def test_mention_reminders():
         {
             "name": "@agent mention",
             "kwargs": {"mentioned_agents": ["agent"]},
-            "should_contain": ["代理", "agent", "call_subagent"],
+            "should_contain": ["代理", "agent", "delegate_task"],
         },
         {
             "name": "Mixed mentions",

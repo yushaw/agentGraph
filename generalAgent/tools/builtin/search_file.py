@@ -30,35 +30,29 @@ TEXT_EXTENSIONS = {".txt", ".md", ".json", ".yaml", ".yml", ".py", ".js", ".ts",
 @tool
 def search_file(
     path: Annotated[str, "File path relative to workspace"],
-    query: Annotated[str, "Search keywords or phrase"],
-    max_results: Annotated[int, "Maximum results to return"] = 5
+    query: Annotated[str, "Search keywords, phrase, or regex pattern"],
+    max_results: Annotated[int, "Maximum results to return"] = 5,
+    output_mode: Annotated[
+        str,
+        "Output mode: 'content' (show excerpts with context), 'pages' (page numbers only), 'count' (match count only)"
+    ] = "content",
+    context_chars: Annotated[int, "Characters to show around match (for 'content' mode, max: 500)"] = 100,
+    use_regex: Annotated[bool, "Use regex pattern matching (slower, more flexible)"] = False
 ) -> str:
-    """Search for content in a file (supports text files and documents).
+    """Search for content in text files and documents (PDF/DOCX/XLSX/PPTX).
 
-    Automatically creates a searchable index on first use (takes 2-5 seconds for
-    documents). Subsequent searches are instant (<100ms).
-
-    Search strategies:
-    - Text files: Line-by-line keyword matching with context
-    - Documents (PDF/DOCX/XLSX/PPTX): Chunk-based multi-strategy matching
-
-    Args:
-        path: File path relative to workspace (e.g., "uploads/report.pdf")
-        query: Search keywords or phrase
-               "Q3 revenue"       : Find exact phrase
-               "revenue growth"   : Find keywords
-        max_results: Maximum results to return (default: 5)
-
-    Returns:
-        Matching sections with context (line/page numbers, surrounding text)
+    Query Syntax:
+    - Simple: "baseline"
+    - Phrase: "\"section 4.1\""  (use quotes for numbers with dots, e.g. "4.1")
+    - Boolean: "baseline OR experiment", "revenue AND growth"
+    - Wildcard: "base*" (matches baseline, baselines)
+    - Regex: "(baseline|experiment)", "error.*message" (set use_regex=True)
 
     Examples:
-        search_file("uploads/error.log", "ERROR")
-        search_file("uploads/report.pdf", "Q3 revenue growth")
-        search_file("uploads/data.xlsx", "customer churn", max_results=3)
-
-    Note: First search on a document creates an index (2-5s), subsequent
-          searches are fast. Index is cached globally by file content (MD5).
+        search_file("uploads/log.txt", "ERROR")
+        search_file("uploads/report.pdf", "\"4.1\" OR baseline")
+        search_file("uploads/data.pdf", "(baseline|experiment)", use_regex=True)
+        search_file("uploads/data.pdf", r"\d+\.\d+", use_regex=True, context_chars=20)  # Find numbers with minimal context
     """
     try:
         workspace_root = os.environ.get("AGENT_WORKSPACE_PATH")
@@ -91,7 +85,7 @@ def search_file(
         if file_ext in TEXT_EXTENSIONS:
             return _search_text_file(file_path, query, max_results)
         elif file_ext in DOCUMENT_EXTENSIONS:
-            return _search_document_file(file_path, query, max_results)
+            return _search_document_file(file_path, query, max_results, context_chars, use_regex)
         else:
             return f"Error: Search not supported for {file_ext} files"
 
@@ -164,7 +158,7 @@ def _search_text_file(file_path: Path, query: str, max_results: int) -> str:
     return "\n".join(lines_output)
 
 
-def _search_document_file(file_path: Path, query: str, max_results: int) -> str:
+def _search_document_file(file_path: Path, query: str, max_results: int, context_chars: int, use_regex: bool) -> str:
     """Search in document file (index-based search)"""
 
     # Check if index exists
@@ -182,7 +176,7 @@ def _search_document_file(file_path: Path, query: str, max_results: int) -> str:
 
     # Execute search
     try:
-        results = search_in_index(file_path, query, max_results)
+        results = search_in_index(file_path, query, max_results, context_chars, use_regex)
     except Exception as e:
         LOGGER.error(f"Failed to search index for {file_path.name}: {e}")
         return f"Error: Search failed - {str(e)}"
@@ -206,23 +200,60 @@ def _search_document_file(file_path: Path, query: str, max_results: int) -> str:
     for i, result in enumerate(results, 1):
         lines_output.append(f"--- Page {result['page']} (Relevance: {result['score']:.1f}) ---")
 
-        # Highlight query in text
-        highlighted_text = _highlight_text(result['text'], query)
-
-        # Limit text length for display
-        if len(highlighted_text) > 500:
-            highlighted_text = highlighted_text[:500] + "..."
+        # Text already expanded by _expand_context in text_indexer
+        # Just highlight the query
+        text = result['text']
+        highlighted_text = _highlight_text(text, query)
 
         lines_output.append(highlighted_text)
-
-        # Show matched keywords (max 5)
-        matched_kw = ", ".join(result['matched_keywords'][:5])
-        lines_output.append(f"[Matched: {matched_kw}]")
         lines_output.append("")  # Empty line separator
 
     LOGGER.info(f"Document search in {file_path.name}: {len(results)} matches")
 
     return "\n".join(lines_output)
+
+
+def _extract_context_around_query(text: str, query: str, max_chars: int = 300) -> str:
+    """Extract context around the first occurrence of query.
+
+    If text is short enough, return it all. Otherwise, extract a window
+    around the first match of the query.
+    """
+    if len(text) <= max_chars:
+        return text
+
+    # Find first occurrence of query (case-insensitive)
+    query_lower = query.lower()
+    text_lower = text.lower()
+
+    match_pos = text_lower.find(query_lower)
+
+    if match_pos == -1:
+        # Query not found (shouldn't happen), return beginning
+        return text[:max_chars] + "..."
+
+    # Calculate window around match
+    # Try to center the query in the context
+    half_window = max_chars // 2
+
+    start = max(0, match_pos - half_window)
+    end = min(len(text), match_pos + half_window)
+
+    # Adjust if we're at the boundaries
+    if start == 0:
+        end = min(len(text), max_chars)
+    elif end == len(text):
+        start = max(0, len(text) - max_chars)
+
+    context = text[start:end]
+
+    # Add ellipsis if truncated
+    if start > 0:
+        context = "..." + context
+    if end < len(text):
+        context = context + "..."
+
+    return context
 
 
 def _highlight_text(text: str, query: str) -> str:

@@ -15,7 +15,6 @@ from generalAgent.utils.document_extractors import (
 @pytest.fixture
 def sample_pdf(tmp_path):
     """Create a sample PDF file for testing."""
-    import pdfplumber
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
 
@@ -24,20 +23,26 @@ def sample_pdf(tmp_path):
     # Create a simple PDF with reportlab
     c = canvas.Canvas(str(pdf_path), pagesize=letter)
 
-    # Page 1
+    # Page 1 - 更多内容以确保分块
     c.drawString(100, 750, "Sample PDF Document")
     c.drawString(100, 730, "This is page 1 content.")
     c.drawString(100, 710, "Testing PDF extraction.")
+    for i in range(10):
+        c.drawString(100, 690 - i*20, f"Additional line {i+1} to ensure sufficient content for chunking.")
     c.showPage()
 
-    # Page 2
+    # Page 2 - 更多内容
     c.drawString(100, 750, "Page 2 Content")
     c.drawString(100, 730, "More test content here.")
+    for i in range(10):
+        c.drawString(100, 710 - i*20, f"Page 2 line {i+1} with enough text for proper chunking behavior.")
     c.showPage()
 
-    # Page 3
+    # Page 3 - 更多内容
     c.drawString(100, 750, "Page 3 Content")
     c.drawString(100, 730, "Final page of test PDF.")
+    for i in range(10):
+        c.drawString(100, 710 - i*20, f"Page 3 line {i+1} ensuring each page gets its own chunk.")
     c.showPage()
 
     c.save()
@@ -180,18 +185,28 @@ def test_extract_pdf_full(sample_pdf):
 
 
 def test_chunk_pdf(sample_pdf):
-    """Test chunking PDF by pages."""
+    """Test chunking PDF with content-aware splitting."""
     chunks = chunk_document(sample_pdf)
 
-    assert len(chunks) == 3  # 3 pages
-    assert chunks[0]['page'] == 1
-    assert chunks[1]['page'] == 2
-    assert chunks[2]['page'] == 3
+    # Should have multiple chunks (pages may be split based on content size)
+    assert len(chunks) >= 3  # At least 3 chunks (could be more due to content-aware splitting)
+
+    # Check that all pages are represented
+    pages = set(c['page'] for c in chunks)
+    assert 1 in pages
+    assert 2 in pages
+    assert 3 in pages
 
     # Check chunk structure
     assert 'id' in chunks[0]
     assert 'text' in chunks[0]
     assert 'offset' in chunks[0]
+
+    # Check text content is present
+    all_text = " ".join(c['text'] for c in chunks)
+    assert "Sample PDF Document" in all_text
+    assert "Page 2 Content" in all_text
+    assert "Page 3 Content" in all_text
 
 
 # ========== DOCX Tests ==========

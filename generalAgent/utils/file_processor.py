@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import base64
+import logging
 import shutil
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
 from dataclasses import dataclass
 
 from .file_upload_parser import format_file_size
+
+LOGGER = logging.getLogger(__name__)
 
 
 FileType = Literal["image", "pdf", "text", "code", "office", "unknown"]
@@ -197,6 +200,21 @@ def process_file(
         else:
             # For pdf, office, unknown: just copy to workspace
             shutil.copy2(source_path, dest_path)
+
+            # Proactive indexing for searchable documents
+            from generalAgent.utils.document_extractors import DOCUMENT_EXTENSIONS
+            if Path(filename).suffix.lower() in DOCUMENT_EXTENSIONS:
+                try:
+                    from generalAgent.utils.text_indexer import index_exists, create_index
+                    # Check if already indexed via MD5
+                    if not index_exists(dest_path):
+                        create_index(dest_path)
+                        LOGGER.info(f"Created search index for {filename}")
+                    else:
+                        LOGGER.info(f"Index already exists for {filename} (skipping via MD5 check)")
+                except Exception as e:
+                    # Non-fatal: indexing failure shouldn't block file upload
+                    LOGGER.warning(f"Failed to create index for {filename}: {e}")
 
             return ProcessedFile(
                 filename=filename,

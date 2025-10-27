@@ -96,7 +96,7 @@ def classify_single_mention(
             pass
 
     # 3. Check if it's an agent keyword (before checking skills)
-    if mention.lower() in ("agent", "subagent", "call_subagent"):
+    if mention.lower() in ("agent", "subagent", "delegate_task"):
         return MentionClassification(mention, "agent")
 
     # 4. Check if it's a skill

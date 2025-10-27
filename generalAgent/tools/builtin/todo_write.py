@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import List
-from langchain_core.tools import tool
+from typing import Annotated, List
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 
 @tool
 def todo_write(
-    todos: List[dict]
-) -> dict:
+    todos: List[dict],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
     """Track multi-step tasks (3+ steps). Helps user see progress.
 
     Use when: Complex multi-step tasks, user requests it, user provides list
@@ -37,16 +40,28 @@ def todo_write(
     # Validate todos
     for todo in todos:
         if "content" not in todo or "status" not in todo:
-            return {
-                "ok": False,
-                "error": "Each todo must have 'content' and 'status' fields"
-            }
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content="❌ 错误: 每个任务必须包含 'content' 和 'status' 字段",
+                            tool_call_id=tool_call_id
+                        )
+                    ]
+                }
+            )
 
         if todo["status"] not in ["pending", "in_progress", "completed"]:
-            return {
-                "ok": False,
-                "error": f"Invalid status: {todo['status']}"
-            }
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=f"❌ 错误: 无效的状态 '{todo['status']}'，必须是 pending/in_progress/completed 之一",
+                            tool_call_id=tool_call_id
+                        )
+                    ]
+                }
+            )
 
         # Ensure id exists
         if "id" not in todo:
@@ -60,17 +75,32 @@ def todo_write(
     # Check only one in_progress
     in_progress = [t for t in todos if t["status"] == "in_progress"]
     if len(in_progress) > 1:
-        return {
-            "ok": False,
-            "error": f"Only one task can be 'in_progress', found {len(in_progress)}"
-        }
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=f"❌ 错误: 只能有一个任务处于 'in_progress' 状态，当前有 {len(in_progress)} 个",
+                        tool_call_id=tool_call_id
+                    )
+                ]
+            }
+        )
 
-    # TODO: Context detection (main vs subagent) will be added later
-    return {
-        "ok": True,
-        "todos": todos,
-        "context": "main"  # Default to main context for now
-    }
+    # Success: update both todos and messages
+    incomplete_count = len([t for t in todos if t["status"] != "completed"])
+    completed_count = len([t for t in todos if t["status"] == "completed"])
+
+    return Command(
+        update={
+            "todos": todos,  # ← 更新 state["todos"]
+            "messages": [
+                ToolMessage(
+                    content=f"✅ TODO 列表已更新: {incomplete_count} 个待完成, {completed_count} 个已完成",
+                    tool_call_id=tool_call_id
+                )
+            ]
+        }
+    )
 
 
 __all__ = ["todo_write"]

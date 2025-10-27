@@ -28,7 +28,8 @@ class AppState(TypedDict, total=False):
     allowed_tools: List[str]
 
     # ========== @Mention tracking ==========
-    mentioned_agents: List[str]  # List of @mentioned agent/skill/tool names
+    mentioned_agents: List[str]  # All @mentioned agent/skill/tool names (historical record)
+    new_mentioned_agents: List[str]  # Current turn's @mentions (for reminder generation, cleared after use)
     persistent_tools: List[str]  # Tools that should remain active for the session
 
     # ========== Task tracking ==========
@@ -49,4 +50,5 @@ class AppState(TypedDict, total=False):
     thread_id: Optional[str]     # Session identifier for persistence
     user_id: Optional[str]       # User identifier (for future personalization)
     workspace_path: Optional[str]  # Isolated workspace directory for this session
-    uploaded_files: List[Any]  # Processed uploaded files (for building reminder in planner)
+    uploaded_files: List[Any]  # All uploaded files (historical record, never cleared)
+    new_uploaded_files: List[Any]  # Files uploaded in current turn (for reminder generation, cleared after use)

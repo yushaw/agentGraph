@@ -189,24 +189,52 @@ class DocumentSettings(BaseModel):
     """
 
     # Text file limits
-    text_file_max_size: int = 100_000  # 100KB - full read threshold
-    text_preview_chars: int = 50_000   # 50K chars - preview size for large text files
+    text_file_max_size: int = 10_000  # 10KB - full read threshold
+    text_preview_chars: int = 5_000   # 5K chars - preview size for large text files
 
     # PDF preview limits
-    pdf_preview_pages: int = 10
-    pdf_preview_chars: int = 30_000
+    pdf_preview_pages: int = 5
+    pdf_preview_chars: int = 5_000
 
     # DOCX preview limits
-    docx_preview_pages: int = 10
-    docx_preview_chars: int = 30_000
+    docx_preview_pages: int = 5
+    docx_preview_chars: int = 5_000
 
     # XLSX preview limits
     xlsx_preview_sheets: int = 3
-    xlsx_preview_chars: int = 20_000
+    xlsx_preview_chars: int = 5_000
 
     # PPTX preview limits
-    pptx_preview_slides: int = 15
-    pptx_preview_chars: int = 25_000
+    pptx_preview_slides: int = 10
+    pptx_preview_chars: int = 5_000
+
+    # Chunking settings (业界最佳实践: 100-300 tokens for keyword search)
+    chunk_max_size: int = 400          # Max characters per chunk (约 100-130 tokens 中文)
+    chunk_overlap: int = 80             # Overlap between chunks (20%)
+    chunk_min_size: int = 50            # Min chunk size to avoid over-fragmentation
+
+    # XLSX specific chunking
+    xlsx_rows_per_chunk: int = 20       # Number of rows per chunk for large sheets
+
+    # Tokenization settings (中文优化)
+    use_jieba: bool = True              # Use jieba for Chinese word segmentation
+    remove_stopwords: bool = True        # Remove common stopwords
+
+    # N-gram settings
+    use_bigrams: bool = True            # Extract bigrams for better matching
+    use_trigrams: bool = True           # Extract trigrams for phrase matching
+
+    # Search algorithm settings
+    search_algorithm: str = "bm25"      # "bm25" (standard) or "simple" (multi-strategy)
+    bm25_k1: float = 1.2                # BM25 term frequency saturation parameter
+    bm25_b: float = 0.75                # BM25 document length normalization
+
+    # Index backend (2025-10-27: 已全面切换至 FTS5)
+    # - 大小写不敏感
+    # - 英文词干提取（baseline = baselines）
+    # - 中文 jieba 分词支持
+    # - SQLite FTS5 高性能倒排索引
+    index_backend: str = "fts5"  # Fixed: FTS5 only
 
     # Search settings
     search_max_results_default: int = 5

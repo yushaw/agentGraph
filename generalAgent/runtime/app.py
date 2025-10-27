@@ -184,9 +184,9 @@ async def build_application(
         approval_checker=approval_checker,
     )
 
-    # Set app graph for call_subagent tool
+    # Set app graph for delegate_task tool
     set_app_graph(app)
-    LOGGER.info("Application graph registered for subagent execution")
+    LOGGER.info("Application graph registered for delegated task execution")
 
     def initial_state() -> dict:
         return {
@@ -194,7 +194,8 @@ async def build_application(
             "images": [],
             "active_skill": None,
             "allowed_tools": [],
-            "mentioned_agents": [],
+            "mentioned_agents": [],  # All @mentions (historical record)
+            "new_mentioned_agents": [],  # Current turn's @mentions (for reminder)
             "persistent_tools": [],
             "model_pref": None,
             "todos": [],
@@ -205,7 +206,8 @@ async def build_application(
             "thread_id": None,
             "user_id": None,
             "workspace_path": None,  # Set by main.py when session starts
-            "uploaded_files": [],  # Track uploaded files
+            "uploaded_files": [],  # All uploaded files (historical record)
+            "new_uploaded_files": [],  # Current turn's uploaded files (for reminder)
         }
 
     return app, initial_state, skill_registry, tool_registry, skill_config

@@ -50,7 +50,7 @@ class ToolConfig:
                 "format_json": {"category": "meta", "tags": ["meta"]},
                 "todo_write": {"category": "meta", "tags": ["meta"]},
                 "todo_read": {"category": "meta", "tags": ["meta"]},
-                "call_subagent": {"category": "agent", "tags": ["agent"]},
+                "delegate_task": {"category": "agent", "tags": ["agent"]},
             },
             "optional": {},
             "directories": {

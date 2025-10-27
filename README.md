@@ -9,9 +9,10 @@ An opinionated LangGraph-based architecture for building various types of agents
 - **Model registry & routing** – register five core model classes (base, reasoning, vision, code, chat) and pick the right model per phase (`plan`, `decompose`, `delegate`, etc.).
 - **Skill packages** – discoverable `skills/<id>/SKILL.yaml` descriptors with progressive disclosure and tool allowlists.
 - **Governed tool runtime** – declarative metadata (`ToolMeta`) for risk tagging, global read-only utilities, and skill-scoped business tools.
-- **MCP Integration** ⭐ NEW – Model Context Protocol support with lazy server startup, manual tool control, and stdio/SSE modes. [Quick Start](docs/MCP_QUICKSTART.md) | [Full Guide](docs/MCP_INTEGRATION.md)
+- **Document Search** ⭐ OPTIMIZED – Industry best practices: BM25 ranking, jieba Chinese segmentation, 400-char smart chunking with 20% overlap. [Details](docs/OPTIMIZATION.md#part-2-document-search-optimization)
+- **MCP Integration** – Model Context Protocol support with lazy server startup, manual tool control, and stdio/SSE modes. [Details](docs/FEATURES.md#part-6-mcp-integration)
 - **LangGraph flow** – `plan → guard → tools → post → (decompose|delegate) → guard → tools → after → …` with deliverable verification and budgets.
-- **Delegation loop** – decomposition into structured plans, delegated subagents with scoped tools, and per-step verification.
+- **Delegation loop** – decomposition into structured plans, delegated delegated agents with scoped tools, and per-step verification.
 - **Observability hooks** – optional LangSmith tracing + Postgres checkpointer.
 
 ## Directory Layout
@@ -195,7 +196,7 @@ See `uploads/README.md` for examples and detailed usage.
 Core tools (always enabled):
 - `now` - Get current UTC time
 - `todo_write`, `todo_read` - Task tracking
-- `call_subagent` - Delegate tasks to subagents
+- `delegate_task` - Delegate tasks to delegated agents
 - `read_file`, `write_file`, `list_workspace_files` - File operations
 - `fetch_web` - Fetch web pages and convert to LLM-friendly markdown (Jina Reader)
 - `web_search` - Search the web with LLM-optimized results (Jina Search)
@@ -221,7 +222,7 @@ Optional tools (can be enabled via tools.yaml):
 3. **tools** – executes actual tool calls.
 4. **post** – updates active skill and allowlists.
 5. **decompose** (conditional) – produces a structured plan (Pydantic validated).
-6. **delegate** – runs scoped subagents per step.
+6. **delegate** – runs scoped delegated agents per step.
 7. **after** – verifies deliverables, advances plan, enforces budgets.
 
 Routing helpers in `generalAgent.graph.routing` decide whether to decompose and when to finish loops.
@@ -234,8 +235,8 @@ Routing helpers in `generalAgent.graph.routing` decide whether to decompose and 
    Drop new skill folders under `skills/` with `SKILL.yaml`, templates, scripts, etc. Call `SkillRegistry.reload()` when hot-reloading.
 3. **Register tools**  
    Add tool functions/classes, register them with `ToolRegistry`, and maintain their `ToolMeta` entries.
-4. **Subagent catalogs & deliverables**  
-   Expand `subagent_catalog` in `runtime/app.py` and extend `deliverable_checkers` for domain-specific outputs.
+4. **Delegated agent catalogs & deliverables**  
+   Expand `delegated agent_catalog` in `runtime/app.py` and extend `deliverable_checkers` for domain-specific outputs.
 5. **Observability & persistence**  
    Set `PG_DSN` for Postgres checkpoints and enable tracing via LangSmith env vars.
 
@@ -266,7 +267,31 @@ python tests/run_tests.py coverage
 - `tests/e2e/` - End-to-end business workflow tests
 - `tests/fixtures/` - Test infrastructure (test MCP servers, etc.)
 
-For detailed testing guidelines and best practices, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md).
+For detailed testing guidelines and best practices, see [docs/TESTING.md](docs/TESTING.md).
+
+## Documentation
+
+Comprehensive documentation is organized into six core documents by topic and audience:
+
+### For New Users
+- **[docs/README.md](docs/README.md)** - Documentation index with quick start guides and topic finder
+- **[docs/FEATURES.md](docs/FEATURES.md)** - User-facing features (Workspace, @Mentions, File Upload, MCP, HITL)
+
+### For Developers
+- **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Environment setup, tool/skill development, best practices
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Core architecture, tool system, skill system, design patterns
+
+### For Advanced Topics
+- **[docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)** - Performance optimization (KV Cache, Document Search, Text Indexer)
+- **[docs/TESTING.md](docs/TESTING.md)** - Comprehensive testing guide (Smoke, Unit, Integration, E2E, HITL)
+
+**Quick links:**
+- Architecture overview → [docs/ARCHITECTURE.md - Part 1](docs/ARCHITECTURE.md#part-1-core-architecture)
+- Tool development → [docs/DEVELOPMENT.md - Part 2](docs/DEVELOPMENT.md#part-2-developing-tools)
+- Skill creation → [docs/DEVELOPMENT.md - Part 3](docs/DEVELOPMENT.md#part-3-developing-skills)
+- Performance tuning → [docs/OPTIMIZATION.md - Part 1](docs/OPTIMIZATION.md#part-1-context-management--kv-cache-optimization)
+
+**Note:** Previous documentation has been archived in [docs/archive/](docs/archive/) with a mapping guide.
 
 ## Next Steps
 
@@ -276,50 +301,29 @@ For detailed testing guidelines and best practices, see [docs/TESTING_GUIDE.md](
 
 ---
 
-## Changelog
+## Recent Updates
 
-### 2025-10-27 - Document Reading and Search Support
+### 2025-10-27
 
-**New Features:**
-- **Document Reading**: Enhanced `read_file` to support PDF, DOCX, XLSX, PPTX documents
-  - Automatic format detection with preview limits
-  - Small files (≤10 pages): Full content extraction
-  - Large files: Preview with search hints (PDF: 10 pages, DOCX: 10 pages, XLSX: 3 sheets, PPTX: 15 slides)
-- **File Finding**: Added `find_files` tool for fast file name pattern matching
-  - Glob pattern support (`*.pdf`, `**/*.py`, `*report*`, `*.{pdf,docx}`)
-  - Follows Unix philosophy (single responsibility)
-- **Content Search**: Added `search_file` tool for searching within files
-  - Text files: Real-time line-by-line scanning with context
-  - Documents: Index-based search with automatic indexing
-  - Multi-strategy scoring: phrase (10 pts) > trigrams (5 pts) > bigrams (3 pts) > keywords (2 pts)
+**Documentation Reorganization** ⭐
+- Consolidated 14 documents → 6 core documents (50% reduction)
+- Created comprehensive maintenance guide in [docs/README.md](docs/README.md)
+- Archived old files with migration mapping
 
-**Infrastructure:**
-- Created `generalAgent/utils/document_extractors.py` for unified document content extraction
-- Created `generalAgent/utils/text_indexer.py` for global MD5-based indexing system
-  - Two-level directory structure in `data/indexes/` (256 subdirectories for performance)
-  - MD5-based content deduplication across sessions
-  - Automatic orphan index cleanup when same-name files are replaced
-  - Automatic staleness detection (24-hour threshold)
+**TODO Tool State Synchronization Fix** ⭐
+- Fixed critical bug: `todo_write` now correctly updates `state["todos"]` using LangGraph `Command` objects
+- Enhanced TODO reminder to display ALL incomplete tasks with priority tags
+- 16 comprehensive tests, 100% passing
 
-**Configuration:**
-- Added `DocumentSettings` to `generalAgent/config/settings.py` for document processing parameters
-- Updated `tools.yaml` to register new tools
-- Updated `.gitignore` to exclude generated indexes
+**Document Search Optimization** ⭐
+- Upgraded with BM25 ranking, jieba Chinese segmentation, smart chunking (400 chars with 20% overlap)
+- Performance gains: +40-60% precision, +30-40% Chinese accuracy
+- Added `find_files` and `search_file` tools with index-based search
 
-**Dependencies:**
-- Added `python-docx>=1.1.0` for DOCX processing
-- Added `openpyxl>=3.1.2` for XLSX processing
-- Added `python-pptx>=0.6.23` for PPTX processing
-- Added `pdfplumber>=0.11.0` for PDF processing (already in dependencies)
+**Document Reading Support**
+- Enhanced `read_file` to support PDF, DOCX, XLSX, PPTX with automatic format detection
+- Smart preview for large files with search hints
+- Global MD5-based indexing system for efficient search
 
-**Testing:**
-- Created `tests/unit/test_document_extractors.py` - Document extraction tests
-- Created `tests/unit/test_text_indexer.py` - Indexing and search tests
-- Created `tests/unit/test_find_search_tools.py` - Tool integration tests
-
-**Documentation:**
-- Updated `CLAUDE.md` with comprehensive tool usage guide and examples
-- Added tool selection guide for optimal usage
-
-For detailed version history and release notes, see [CHANGELOG.md](CHANGELOG.md).
+For complete version history and detailed technical explanations, see [CHANGELOG.md](CHANGELOG.md).
 

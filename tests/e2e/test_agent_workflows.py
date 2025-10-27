@@ -16,7 +16,7 @@ import tempfile
 import shutil
 from unittest.mock import Mock, patch
 
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.memory import MemorySaver
 from generalAgent.runtime.app import build_application
 from generalAgent.graph.state import AppState
 from langchain_core.messages import HumanMessage, AIMessage
@@ -514,7 +514,7 @@ class TestSubagentDelegation:
         # 验证任务完成
         assert len(result["messages"]) > 1
 
-        # 检查是否使用了 call_subagent（可能）或直接完成
+        # 检查是否使用了 delegate_task（可能）或直接完成
         messages_str = str(result["messages"])
         # 应该读取了源文件
         assert "read_file" in messages_str.lower() or "report_data" in messages_str
@@ -530,7 +530,7 @@ class TestSubagentDelegation:
         # 委派一个会失败的任务
         state = initial_state.copy()
         state["messages"] = [
-            HumanMessage(content="使用 call_subagent 读取一个不存在的文件 nonexistent_12345.txt")
+            HumanMessage(content="使用 delegate_task 读取一个不存在的文件 nonexistent_12345.txt")
         ]
 
         config = {"configurable": {"thread_id": "test-subagent-error-001"}}

@@ -81,7 +81,7 @@
 
 ### 4.1 子 Agent 返回值 Schema
 - 定义标准返回格式（JSON schema）
-- 在 `call_subagent` 工具中增加 schema 验证
+- 在 `delegate_task` 工具中增加 schema 验证
 - 参考 OpenAI Function Calling 的 response_format
 
 ### 4.2 Context Offload
@@ -131,7 +131,7 @@
 **实现思路**:
 
 ### 6.1 参数传递
-- 扩展 `call_subagent` 工具的参数定义
+- 扩展 `delegate_task` 工具的参数定义
 - 支持传递文件路径、JSON 数据、变量引用
 - 子 Agent workspace 是否共享主 Agent workspace？
 

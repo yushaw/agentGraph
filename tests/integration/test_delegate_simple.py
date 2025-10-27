@@ -1,23 +1,23 @@
-"""Simple test to verify call_subagent initialization."""
+"""Simple test to verify delegate_task initialization."""
 
 import asyncio
 from generalAgent.runtime import build_application
 from langchain_core.messages import HumanMessage
 
 
-async def test_subagent_init():
+async def test_delegate_init():
     print("Building application...")
     app, initial_state_factory, skill_registry, tool_registry = await build_application()
 
     print("Creating initial state...")
     state = initial_state_factory()
 
-    # Add a simple message that should trigger call_subagent
+    # Add a simple message that should trigger delegate_task
     state["messages"] = [
-        HumanMessage(content="使用 call_subagent 帮我测试一下")
+        HumanMessage(content="使用 delegate_task 帮我测试一下")
     ]
 
-    # Mention agent to trigger subagent loading
+    # Mention agent to trigger delegate loading
     state["mentioned_agents"] = ["agent"]
 
     print("Running graph...")
@@ -38,4 +38,4 @@ async def test_subagent_init():
 
 
 if __name__ == "__main__":
-    asyncio.run(test_subagent_init())
+    asyncio.run(test_delegate_init())

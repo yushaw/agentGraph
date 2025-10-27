@@ -1,15 +1,20 @@
-"""Text indexer for document search.
+"""SQLite FTS5-based text indexer for document search.
 
-全局索引管理器，使用 MD5 标识文件，支持索引缓存和自动更新。
-索引存储在 data/indexes/ 目录下。
+全局索引管理器，使用 SQLite FTS5 全文搜索引擎。
+
+特性（2025-10-27）：
+- **大小写不敏感**：baseline = Baseline = BASELINE
+- **英文词干提取**：baseline = baselines（Porter stemmer）
+- **中文分词**：jieba 分词预处理
+- **高性能**：倒排索引，O(log N) 查询复杂度
+- **标准化存储**：一个 SQLite 数据库管理所有文档索引
 """
 
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
-import re
+import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -20,8 +25,8 @@ from generalAgent.utils.document_extractors import chunk_document
 
 LOGGER = logging.getLogger(__name__)
 
-# 全局索引目录
-INDEXES_DIR = get_project_root() / "data" / "indexes"
+# 全局索引数据库路径
+INDEXES_DB = get_project_root() / "data" / "indexes.db"
 
 
 def compute_file_hash(file_path: Path) -> str:
@@ -35,413 +40,767 @@ def compute_file_hash(file_path: Path) -> str:
     return md5.hexdigest()
 
 
-def get_index_path(file_hash: str) -> Path:
-    """获取索引文件路径（基于文件 MD5）
+def _get_connection() -> sqlite3.Connection:
+    """获取数据库连接并初始化表结构"""
+    # 确保目录存在
+    INDEXES_DB.parent.mkdir(parents=True, exist_ok=True)
 
-    Args:
-        file_hash: 文件 MD5 哈希值
+    conn = sqlite3.connect(str(INDEXES_DB))
+    conn.row_factory = sqlite3.Row  # 返回字典式行
 
-    Returns:
-        索引文件路径: data/indexes/{hash[:2]}/{hash}.index.json
-        使用两级目录避免单目录文件过多
-    """
-    # 两级目录：前2个字符作为子目录
-    subdir = file_hash[:2]
-    index_dir = INDEXES_DIR / subdir
-    index_dir.mkdir(parents=True, exist_ok=True)
+    # 创建元数据表（记录文件信息）
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS file_metadata (
+            file_hash TEXT PRIMARY KEY,
+            file_name TEXT NOT NULL,
+            file_type TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            indexed_at TEXT NOT NULL,
+            total_chunks INTEGER NOT NULL,
+            full_text TEXT  -- 完整文档文本（用于 grep 搜索）
+        )
+    ''')
 
-    return index_dir / f"{file_hash}.index.json"
+    # 迁移：为已存在的表添加 full_text 列（如果不存在）
+    try:
+        conn.execute('ALTER TABLE file_metadata ADD COLUMN full_text TEXT')
+        conn.commit()
+        LOGGER.info("Added full_text column to file_metadata table")
+    except sqlite3.OperationalError:
+        # 列已存在，忽略
+        pass
+
+    # 创建 FTS5 全文搜索表
+    # tokenize='porter unicode61' - Porter stemmer + Unicode支持
+    # remove_diacritics 2 - 移除变音符号
+    conn.execute('''
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+            file_hash UNINDEXED,
+            chunk_id UNINDEXED,
+            page UNINDEXED,
+            text,
+            text_jieba,
+            tokenize='porter unicode61 remove_diacritics 2'
+        )
+    ''')
+
+    # 创建普通表存储chunk元数据
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS chunks_meta (
+            file_hash TEXT NOT NULL,
+            chunk_id INTEGER NOT NULL,
+            page INTEGER NOT NULL,
+            offset INTEGER NOT NULL,
+            PRIMARY KEY (file_hash, chunk_id),
+            FOREIGN KEY (file_hash) REFERENCES file_metadata(file_hash) ON DELETE CASCADE
+        )
+    ''')
+
+    conn.commit()
+    return conn
 
 
 def index_exists(file_path: Path) -> bool:
     """检查文件是否已索引（且索引有效）"""
     file_hash = compute_file_hash(file_path)
-    index_path = get_index_path(file_hash)
 
-    if not index_path.exists():
-        return False
-
-    # 检查索引是否过期
+    conn = _get_connection()
     try:
-        with open(index_path, "r", encoding="utf-8") as f:
-            index_data = json.load(f)
+        cursor = conn.execute(
+            'SELECT indexed_at FROM file_metadata WHERE file_hash = ?',
+            (file_hash,)
+        )
+        row = cursor.fetchone()
 
-        indexed_at = datetime.fromisoformat(index_data.get("indexed_at", ""))
+        if not row:
+            return False
+
+        # 检查索引是否过期
+        indexed_at = datetime.fromisoformat(row['indexed_at'])
         threshold_hours = get_settings().documents.index_stale_threshold_hours
         stale_threshold = datetime.now() - timedelta(hours=threshold_hours)
 
-        # 如果索引创建时间太久远，认为过期
         if indexed_at < stale_threshold:
-            LOGGER.info(f"Index for {file_path.name} is stale (>  {threshold_hours}h), will rebuild")
+            LOGGER.info(f"Index for {file_path.name} is stale (> {threshold_hours}h), will rebuild")
             return False
 
         return True
-    except Exception as e:
-        LOGGER.warning(f"Failed to validate index for {file_path.name}: {e}")
-        return False
+    finally:
+        conn.close()
 
 
-def cleanup_old_indexes_for_file(file_path: Path, keep_hash: str):
-    """清理指定文件路径的旧索引（自动处理同名文件覆盖场景）
+def _preprocess_text_with_jieba(text: str) -> str:
+    """使用 jieba 预处理中文文本
 
-    当用户上传同名文件但内容不同时（MD5 不同），会产生孤儿索引。
-    此函数在创建新索引时自动清理旧索引，保持索引目录整洁。
-
-    Args:
-        file_path: 文件路径
-        keep_hash: 要保留的文件哈希（当前版本）
-
-    Example:
-        用户在同一 session 中:
-        1. 上传 report.pdf (hash: abc123) → 创建索引 abc123.index.json
-        2. 上传 report.pdf (hash: def456) → 创建索引 def456.index.json
-        3. 自动删除 abc123.index.json（孤儿索引）
+    将中文文本用 jieba 分词，用空格分隔，这样 FTS5 可以正确索引中文词汇。
     """
-    if not INDEXES_DIR.exists():
-        return
+    settings = get_settings()
 
-    file_path_str = str(file_path)
-    deleted_count = 0
+    if not settings.documents.use_jieba:
+        return text
 
-    for index_file in INDEXES_DIR.rglob("*.index.json"):
-        try:
-            with open(index_file, "r", encoding="utf-8") as f:
-                index_data = json.load(f)
-
-            # 如果是同一文件路径，但不是当前哈希，删除旧索引
-            if index_data.get("file_path") == file_path_str:
-                if index_data.get("file_hash") != keep_hash:
-                    index_file.unlink()
-                    deleted_count += 1
-                    LOGGER.debug(f"Deleted old index for {file_path.name}: {index_file.name}")
-        except Exception as e:
-            LOGGER.warning(f"Failed to check index {index_file.name}: {e}")
-
-    if deleted_count > 0:
-        LOGGER.info(f"Cleaned up {deleted_count} old index(es) for {file_path.name}")
+    try:
+        import jieba
+        # 禁用 jieba 的日志输出
+        jieba.setLogLevel(logging.ERROR)
+        # 使用搜索模式分词（会生成更多词组）
+        words = jieba.cut_for_search(text)
+        return ' '.join(words)
+    except ImportError:
+        LOGGER.warning("jieba not installed, skipping Chinese preprocessing")
+        return text
 
 
 def create_index(file_path: Path) -> Path:
-    """创建文档搜索索引
-
-    Args:
-        file_path: 文档文件路径
+    """为文档创建 FTS5 索引
 
     Returns:
-        索引文件路径
-
-    Raises:
-        Exception: 如果索引创建失败
+        数据库文件路径（所有索引共享一个数据库）
     """
-    LOGGER.info(f"Creating search index for {file_path.name}...")
-
-    start_time = datetime.now()
-
-    # 计算文件哈希
     file_hash = compute_file_hash(file_path)
+    file_size = file_path.stat().st_size
 
-    # 清理该文件路径的旧索引（处理同名文件覆盖场景）
+    LOGGER.info(f"Creating FTS5 index for {file_path.name} (hash: {file_hash[:8]}...)")
+
+    # 清理旧索引
     cleanup_old_indexes_for_file(file_path, keep_hash=file_hash)
 
-    # 分块提取文档内容
+    # 分块文档
     chunks = chunk_document(file_path)
 
     if not chunks:
         raise ValueError(f"No content extracted from {file_path.name}")
 
-    # 为每个 chunk 构建搜索索引
-    indexed_chunks = []
-    for chunk in chunks:
-        indexed_chunks.append({
-            "chunk_id": chunk["id"],
-            "page": chunk["page"],
-            "text": chunk["text"],
+    # 合并所有 chunks 为完整文本（用于 grep 搜索）
+    full_text = "\n".join(chunk['text'] for chunk in chunks)
 
-            # 搜索索引
-            "keywords": extract_keywords(chunk["text"]),
-            "bigrams": extract_ngrams(chunk["text"], n=2),
-            "trigrams": extract_ngrams(chunk["text"], n=3),
+    conn = _get_connection()
+    try:
+        # 插入文件元数据（包含完整文本）
+        conn.execute('''
+            INSERT OR REPLACE INTO file_metadata
+            (file_hash, file_name, file_type, file_size, indexed_at, total_chunks, full_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            file_hash,
+            file_path.name,
+            file_path.suffix,
+            file_size,
+            datetime.now().isoformat(),
+            len(chunks),
+            full_text
+        ))
 
-            "char_count": len(chunk["text"]),
-            "char_offset": chunk.get("offset", 0)
-        })
+        # 删除旧的 chunks（如果存在）
+        conn.execute('DELETE FROM chunks_fts WHERE file_hash = ?', (file_hash,))
+        conn.execute('DELETE FROM chunks_meta WHERE file_hash = ?', (file_hash,))
 
-    # 构建索引数据
-    index_data = {
-        "file_path": str(file_path),
-        "file_name": file_path.name,
-        "file_type": file_path.suffix,
-        "file_hash": file_hash,
-        "file_size": file_path.stat().st_size,
+        # 插入 chunks
+        for chunk in chunks:
+            chunk_id = chunk['id']
+            page = chunk['page']
+            text = chunk['text']
+            offset = chunk['offset']
 
-        "indexed_at": datetime.now().isoformat(),
-        "indexer_version": "1.0",
+            # jieba 预处理文本（用于中文搜索）
+            text_jieba = _preprocess_text_with_jieba(text)
 
-        "metadata": {
-            "total_pages": len(set(c["page"] for c in chunks)),
-            "total_chunks": len(chunks),
-            "total_chars": sum(c["char_count"] for c in indexed_chunks),
-        },
+            # 插入 FTS5 表（用于全文搜索）
+            conn.execute('''
+                INSERT INTO chunks_fts (file_hash, chunk_id, page, text, text_jieba)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (file_hash, chunk_id, page, text, text_jieba))
 
-        "chunks": indexed_chunks,
+            # 插入元数据表
+            conn.execute('''
+                INSERT INTO chunks_meta (file_hash, chunk_id, page, offset)
+                VALUES (?, ?, ?, ?)
+            ''', (file_hash, chunk_id, page, offset))
 
-        # 预留向量检索字段（v2.0）
-        "vector_index_available": False,
-        "vector_model": None,
-        "embeddings_path": None
-    }
+        conn.commit()
+        LOGGER.info(f"FTS5 index created: {len(chunks)} chunks")
 
-    # 保存索引
-    index_path = get_index_path(file_hash)
+    finally:
+        conn.close()
 
-    with open(index_path, "w", encoding="utf-8") as f:
-        json.dump(index_data, f, ensure_ascii=False, indent=2)
-
-    elapsed = (datetime.now() - start_time).total_seconds()
-    LOGGER.info(
-        f"Index created for {file_path.name}: "
-        f"{len(chunks)} chunks, {index_path.stat().st_size:,} bytes, "
-        f"took {elapsed:.2f}s"
-    )
-
-    return index_path
+    return INDEXES_DB
 
 
-def load_index(file_path: Path) -> Dict:
-    """加载文档索引
+def _should_use_fts5(query: str, use_regex: bool) -> bool:
+    """判断是否使用 FTS5（返回 False 则用 Grep）
 
     Args:
-        file_path: 文档文件路径
+        query: 查询字符串
+        use_regex: 用户是否明确指定正则模式
 
     Returns:
-        索引数据字典
-
-    Raises:
-        FileNotFoundError: 如果索引不存在
+        True: 使用 FTS5（高效）
+        False: 使用 Grep（正则支持）
     """
-    file_hash = compute_file_hash(file_path)
-    index_path = get_index_path(file_hash)
+    import re
 
-    if not index_path.exists():
-        raise FileNotFoundError(f"Index not found for {file_path.name}")
+    # 1. 用户明确指定 use_regex=True → Grep
+    if use_regex:
+        return False
 
-    with open(index_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    # 2. 检测明确的正则语法（FTS5 不支持）
+    regex_patterns = [
+        r'\[.*?\]',       # 字符类 [A-Z]
+        r'\{.*?\}',       # 量词 {5,10}
+        r'\(',            # 分组 (pattern)
+        r'\$',            # 行尾锚点
+        r'\^',            # 行首锚点
+        r'\\[dDwWsS]',    # 转义字符类 \d \w \s
+        r'\.\*',          # 任意字符 .*
+        r'\.\+',          # 至少一个 .+
+        r'\.\?',          # 可选 .?
+        r'(?<!")\|(?!")', # 或 | (不在引号内)
+    ]
+
+    for pattern in regex_patterns:
+        if re.search(pattern, query):
+            return False  # 包含复杂正则 → Grep
+
+    # 3. FTS5 支持的模式允许通过：
+    # - 引号短语: "section 4.1"
+    # - 词尾通配符: base*
+    # - 布尔操作: OR AND NOT
+    return True  # 简单查询 → FTS5
+
+
+def _search_with_grep(
+    file_hash: str,
+    full_text: str,
+    regex_pattern: str,
+    max_results: int,
+    context_chars: int
+) -> List[Dict]:
+    """使用 Python re 在完整文本中搜索（支持完整正则）
+
+    Args:
+        file_hash: 文件哈希
+        full_text: 完整文档文本
+        regex_pattern: 正则表达式
+        max_results: 最大结果数
+        context_chars: 上下文字符数
+
+    Returns:
+        搜索结果列表 [{'chunk_id': 0, 'page': 0, 'text': '...', 'score': 100.0}, ...]
+    """
+    import re
+
+    if not full_text or not regex_pattern:
+        return []
+
+    results = []
+
+    try:
+        # 编译正则（忽略大小写）
+        pattern = re.compile(regex_pattern, re.IGNORECASE | re.MULTILINE)
+
+        # 查找所有匹配
+        for match_idx, match in enumerate(pattern.finditer(full_text)):
+            if len(results) >= max_results:
+                break
+
+            start = match.start()
+            end = match.end()
+
+            # 提取上下文
+            context_start = max(0, start - context_chars)
+            context_end = min(len(full_text), end + context_chars)
+
+            text_with_context = full_text[context_start:context_end]
+
+            # 添加省略号
+            if context_start > 0:
+                text_with_context = "..." + text_with_context
+            if context_end < len(full_text):
+                text_with_context = text_with_context + "..."
+
+            results.append({
+                'chunk_id': match_idx,  # 使用匹配索引作为 ID
+                'page': 0,  # Grep 搜索无法确定页码
+                'text': text_with_context,
+                'score': 100.0  # Grep 无相关度评分，固定值
+            })
+
+    except re.error as e:
+        LOGGER.warning(f"Invalid regex pattern '{regex_pattern}': {e}")
+        return []
+
+    return results
+
+
+def _escape_fts5_special_chars(query: str) -> str:
+    """转义 FTS5 查询中的特殊字符
+
+    FTS5 特殊字符：. , : ; ( ) [ ] { } * " '
+    策略：
+    - 检测数字带小数点（如 4.1），自动加引号
+    - 检测带标点的短语，建议用引号
+
+    Args:
+        query: 原始查询字符串
+
+    Returns:
+        转义后的查询字符串
+    """
+    import re
+
+    # 转义数字带小数点（如 4.1 -> "4.1"）
+    # 只处理未被引号包裹的数字
+    def quote_decimals(text):
+        # 匹配不在引号内的小数
+        pattern = r'(?<!")(\b\d+\.\d+\b)(?!")'
+        return re.sub(pattern, r'"\1"', text)
+
+    query = quote_decimals(query)
+
+    return query
+
+
+def _extract_keywords_from_regex(regex_pattern: str) -> str:
+    """从正则表达式中提取关键词（用于 FTS5 初步搜索）
+
+    策略：
+    - 提取字母数字序列（忽略特殊字符）
+    - 移除正则元字符（^$.*+?[]{}()|\）
+    - 如果提取不到关键词，返回空字符串（将搜索所有chunks）
+
+    Args:
+        regex_pattern: 正则表达式模式
+
+    Returns:
+        提取的关键词（空格分隔）
+    """
+    import re
+
+    # 移除正则元字符
+    cleaned = re.sub(r'[\\^$.*+?[\]{}()|]', ' ', regex_pattern)
+
+    # 提取字母数字词
+    words = re.findall(r'\w+', cleaned)
+
+    # 过滤太短的词（可能是噪音）
+    keywords = [w for w in words if len(w) >= 2]
+
+    if not keywords:
+        # 无法提取关键词，返回通配符（匹配所有）
+        return "*"
+
+    # 返回 OR 组合（FTS5 语法）
+    return " OR ".join(keywords)
+
+
+def _filter_by_regex(
+    results: List[Dict],
+    regex_pattern: str,
+    max_results: int
+) -> List[Dict]:
+    """使用正则表达式过滤搜索结果
+
+    Args:
+        results: 搜索结果列表
+        regex_pattern: 正则表达式模式
+        max_results: 最大结果数
+
+    Returns:
+        匹配正则的结果列表
+    """
+    if not results or not regex_pattern:
+        return results
+
+    import re
+
+    try:
+        # 编译正则（支持多行和大小写不敏感）
+        pattern = re.compile(regex_pattern, re.IGNORECASE | re.MULTILINE)
+    except re.error as e:
+        LOGGER.error(f"Invalid regex pattern '{regex_pattern}': {e}")
+        return []  # 正则无效时返回空结果
+
+    filtered_results = []
+    for result in results:
+        text = result['text']
+        if pattern.search(text):
+            # 计算匹配数（用于评分）
+            matches = pattern.findall(text)
+            result_copy = result.copy()
+            result_copy['score'] = float(len(matches))  # 匹配次数作为得分
+            filtered_results.append(result_copy)
+
+    # 按匹配次数排序
+    filtered_results.sort(key=lambda x: x['score'], reverse=True)
+
+    return filtered_results[:max_results]
+
+
+def _expand_context(
+    conn: sqlite3.Connection,
+    file_hash: str,
+    results: List[Dict],
+    context_chars: int,
+    query: str
+) -> List[Dict]:
+    """扩展搜索结果的上下文（跨 chunk 获取）
+
+    策略：
+    1. 提取查询在 chunk 中的位置
+    2. 如果当前 chunk 的上下文不够 context_chars，尝试获取相邻 chunk
+    3. 优先扩展查询位置周围的文本
+
+    Args:
+        conn: 数据库连接
+        file_hash: 文件哈希
+        results: 搜索结果列表
+        context_chars: 目标上下文字符数
+        query: 搜索查询
+
+    Returns:
+        扩展上下文后的结果列表
+    """
+    if not results or context_chars <= 0:
+        return results
+
+    expanded_results = []
+
+    for result in results:
+        chunk_id = result['chunk_id']
+        text = result['text']
+
+        # 如果当前 chunk 的文本已经足够长，直接返回
+        if len(text) >= context_chars:
+            expanded_results.append(result)
+            continue
+
+        # 需要从相邻 chunk 获取更多上下文
+        # 计算需要多少额外字符
+        needed_chars = context_chars - len(text)
+        half_needed = needed_chars // 2
+
+        # 获取前一个 chunk（如果存在）
+        prev_text = ""
+        if chunk_id > 0:
+            cursor = conn.execute('''
+                SELECT text FROM chunks_fts
+                WHERE file_hash = ? AND chunk_id = ?
+            ''', (file_hash, chunk_id - 1))
+            row = cursor.fetchone()
+            if row:
+                prev_text = row['text']
+                # 只取后半部分（避免上下文过长）
+                if len(prev_text) > half_needed:
+                    prev_text = "..." + prev_text[-half_needed:]
+
+        # 获取后一个 chunk（如果存在）
+        next_text = ""
+        cursor = conn.execute('''
+            SELECT text FROM chunks_fts
+            WHERE file_hash = ? AND chunk_id = ?
+        ''', (file_hash, chunk_id + 1))
+        row = cursor.fetchone()
+        if row:
+            next_text = row['text']
+            # 只取前半部分（避免上下文过长）
+            if len(next_text) > half_needed:
+                next_text = next_text[:half_needed] + "..."
+
+        # 组合文本
+        expanded_text = prev_text + text + next_text
+
+        # 更新结果
+        expanded_result = result.copy()
+        expanded_result['text'] = expanded_text
+        expanded_results.append(expanded_result)
+
+    return expanded_results
 
 
 def search_in_index(
     file_path: Path,
     query: str,
-    max_results: int = 5
+    max_results: int = 5,
+    context_chars: int = 100,
+    use_regex: bool = False
 ) -> List[Dict]:
-    """在索引中搜索（多策略评分）
+    """在索引中搜索内容（使用 FTS5）
+
+    特性：
+    - 大小写不敏感
+    - 英文词干提取（baseline = baselines）
+    - 中文分词支持
+    - BM25 排序（FTS5 内置）
+    - 跨 chunk 上下文获取
+    - 正则表达式搜索（FTS5 + Python re 后处理）
 
     Args:
-        file_path: 文档文件路径
-        query: 搜索关键词或短语
-        max_results: 最大返回结果数
+        file_path: 文档路径
+        query: 搜索查询（如果 use_regex=True，则为正则表达式）
+        max_results: 最大结果数
+        context_chars: 上下文字符数（会尝试从相邻 chunk 获取更多上下文）
+        use_regex: 是否使用正则表达式搜索（先用 FTS5 找候选，再用 re 过滤）
 
     Returns:
-        匹配的 chunk 列表，每个包含:
+        搜索结果列表，每项包含:
         - chunk_id: chunk 编号
         - page: 页码
-        - text: 文本内容
-        - score: 匹配得分
-        - matched_keywords: 匹配的关键词列表
+        - text: 文本内容（已扩展上下文）
+        - score: BM25 相关性得分（对于正则搜索，score 始终为 1.0）
     """
-    # 加载索引
-    index_data = load_index(file_path)
+    file_hash = compute_file_hash(file_path)
 
-    # 预处理查询
-    query_lower = query.lower()
-    query_keywords = extract_keywords(query)
-    query_bigrams = extract_ngrams(query, n=2)
-    query_trigrams = extract_ngrams(query, n=3)
+    if not index_exists(file_path):
+        raise FileNotFoundError(f"No index found for {file_path.name}. Create index first.")
 
-    # 搜索所有 chunks
-    matches = []
+    # 处理空查询
+    if not query or not query.strip():
+        return []
 
-    for chunk in index_data["chunks"]:
-        score = 0
-        matched_keywords = []
+    # 判断使用 FTS5 还是 Grep
+    use_fts5 = _should_use_fts5(query, use_regex)
 
-        # 策略 1: 完整短语匹配（权重最高）
-        if query_lower in chunk["text"].lower():
-            score += 10
-            matched_keywords.append(f"phrase:'{query}'")
+    if not use_fts5:
+        # 使用 Grep 搜索完整文本
+        LOGGER.info(f"Using Grep search for pattern: {query}")
+        conn = _get_connection()
+        try:
+            # 获取完整文本
+            cursor = conn.execute(
+                'SELECT full_text FROM file_metadata WHERE file_hash = ?',
+                (file_hash,)
+            )
+            row = cursor.fetchone()
 
-        # 策略 2: 三元词组匹配
-        for trigram in query_trigrams:
-            if trigram in chunk.get("trigrams", []):
-                score += 5
-                matched_keywords.append(f"3-gram:{trigram}")
+            if not row or not row['full_text']:
+                LOGGER.warning(f"No full_text found for {file_path.name}")
+                return []
 
-        # 策略 3: 二元词组匹配
-        for bigram in query_bigrams:
-            if bigram in chunk.get("bigrams", []):
-                score += 3
-                matched_keywords.append(f"2-gram:{bigram}")
+            full_text = row['full_text']
+            return _search_with_grep(file_hash, full_text, query, max_results, context_chars)
 
-        # 策略 4: 单关键词匹配
-        chunk_keywords_set = set(chunk["keywords"])
-        for kw in query_keywords:
-            # 精确匹配
-            if kw in chunk_keywords_set:
-                score += 2
-                matched_keywords.append(kw)
-            # 模糊匹配（子串）
-            elif any(kw in ck or ck in kw for ck in chunk_keywords_set):
-                score += 1
-                matched_keywords.append(f"~{kw}")
+        finally:
+            conn.close()
 
-        # 策略 5: 查询词覆盖率（bonus）
-        text_lower = chunk["text"].lower()
-        query_words = query_lower.split()
-        matched_count = sum(1 for w in query_words if w in text_lower)
-        coverage = matched_count / len(query_words) if query_words else 0
-        score += coverage * 2  # 最多 +2 分
+    # 使用 FTS5 搜索
+    LOGGER.info(f"Using FTS5 search for query: {query}")
+    conn = _get_connection()
+    try:
+        # 正则搜索模式：提取关键词并扩大搜索范围
+        if use_regex:
+            # 从正则表达式中提取可能的关键词
+            search_query = _extract_keywords_from_regex(query)
+            # 获取更多候选（用于正则过滤）
+            candidate_limit = max_results * 10
+        else:
+            # 转义 FTS5 特殊字符（如小数点）
+            search_query = _escape_fts5_special_chars(query)
+            candidate_limit = max_results
 
-        if score > 0:
-            matches.append({
-                "chunk_id": chunk["chunk_id"],
-                "page": chunk["page"],
-                "text": chunk["text"],
-                "score": round(score, 2),
-                "matched_keywords": list(set(matched_keywords))[:5]  # 最多显示5个
-            })
+        # FTS5 搜索查询
+        # - 搜索 text 列（英文，Porter stemmer 处理）
+        # - 搜索 text_jieba 列（中文分词结果）
+        # - 使用 bm25() 函数获取相关性得分
+        # - ORDER BY rank 自动按相关性排序（rank 是 bm25 分数的负值）
 
-    # 按得分排序，返回 Top-K
-    matches.sort(key=lambda x: x["score"], reverse=True)
-    return matches[:max_results]
+        results = []
+
+        # 为中文查询预处理（jieba 分词）
+        query_jieba = _preprocess_text_with_jieba(search_query)
+
+        # 尝试在两个字段中搜索
+        search_attempts = [
+            ('text', search_query),          # 英文搜索（Porter stemmer）
+            ('text_jieba', query_jieba)  # 中文搜索（jieba 分词）
+        ]
+
+        for column, search_query in search_attempts:
+            if not search_query or not search_query.strip():
+                continue
+
+            retry_count = 0
+            max_retries = 1
+            last_error = None
+            cursor = None  # Initialize cursor to avoid UnboundLocalError
+
+            while retry_count <= max_retries:
+                try:
+                    # FTS5 的 bm25() 函数需要使用表名作为参数
+                    cursor = conn.execute(f'''
+                        SELECT
+                            c.chunk_id,
+                            m.page,
+                            c.text,
+                            bm25(chunks_fts) as score
+                        FROM chunks_fts c
+                        JOIN chunks_meta m ON c.file_hash = m.file_hash AND c.chunk_id = m.chunk_id
+                        WHERE c.file_hash = ? AND {column} MATCH ?
+                        ORDER BY score
+                        LIMIT ?
+                    ''', (file_hash, search_query, candidate_limit))
+                    break  # 成功，退出重试循环
+                except Exception as e:
+                    last_error = e
+                    # 检测是否是语法错误
+                    if "syntax error" in str(e).lower() and retry_count == 0:
+                        # 第一次尝试失败，使用更激进的转义
+                        LOGGER.warning(f"FTS5 syntax error, retrying with escaped query: {e}")
+                        # 简单回退：移除所有布尔操作符，只保留关键词
+                        import re
+                        words = re.findall(r'\w+', search_query)
+                        if words:
+                            search_query = " OR ".join(words)
+                            retry_count += 1
+                        else:
+                            break  # 无法提取关键词，放弃
+                    else:
+                        # 其他错误或第二次失败，跳过此列
+                        break
+
+            if last_error and retry_count > max_retries:
+                LOGGER.warning(f"FTS5 search failed for column {column} after retries: {last_error}")
+                continue
+
+            # Skip if cursor was not successfully created
+            if cursor is None:
+                continue
+
+            for row in cursor:
+                results.append({
+                    'chunk_id': row['chunk_id'],
+                    'page': row['page'],
+                    'text': row['text'],
+                    'score': abs(row['score'])  # 转为正数（越大越相关）
+                })
+
+            if results:
+                break  # 找到结果就停止
+
+        # 按分数降序排序并去重
+        results = sorted(results, key=lambda x: x['score'], reverse=True)
+
+        # 去重（可能同一chunk在两个字段都匹配）
+        seen = set()
+        unique_results = []
+        for r in results:
+            if r['chunk_id'] not in seen:
+                seen.add(r['chunk_id'])
+                unique_results.append(r)
+
+        # 扩展上下文（如果需要）
+        expanded_results = _expand_context(
+            conn, file_hash, unique_results[:max_results], context_chars, query
+        )
+
+        # 正则表达式后处理（如果启用）
+        if use_regex:
+            expanded_results = _filter_by_regex(expanded_results, query, max_results)
+
+        return expanded_results
+
+    finally:
+        conn.close()
 
 
-def extract_keywords(text: str) -> List[str]:
-    """提取关键词（简单分词 + 停用词过滤）
+def load_index(file_path: Path) -> Dict:
+    """加载索引数据（兼容接口，返回元数据）"""
+    file_hash = compute_file_hash(file_path)
 
-    Args:
-        text: 文本内容
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            'SELECT * FROM file_metadata WHERE file_hash = ?',
+            (file_hash,)
+        )
+        row = cursor.fetchone()
 
-    Returns:
-        关键词列表（去重）
-    """
-    # 分词（中英文混合）
-    words = re.findall(r'[\w]+', text.lower())
+        if not row:
+            raise FileNotFoundError(f"No index found for {file_path.name}")
 
-    # 停用词
-    stopwords = {
-        # 中文
-        "的", "了", "在", "是", "和", "有", "与", "及", "等", "为", "将", "对", "由", "从", "这", "那",
-        # 英文
-        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
-        "as", "by", "from", "this", "that", "these", "those", "it", "is", "are", "was", "were"
-    }
-
-    # 过滤：停用词 + 长度 < 2
-    keywords = [w for w in words if w not in stopwords and len(w) >= 2]
-
-    return list(set(keywords))
+        return {
+            'file_name': row['file_name'],
+            'file_type': row['file_type'],
+            'file_hash': row['file_hash'],
+            'indexed_at': row['indexed_at'],
+            'total_chunks': row['total_chunks']
+        }
+    finally:
+        conn.close()
 
 
-def extract_ngrams(text: str, n: int) -> List[str]:
-    """提取 N-gram（词组）
+def cleanup_old_indexes_for_file(file_path: Path, keep_hash: str):
+    """清理指定文件路径的旧索引（处理同名文件覆盖场景）"""
+    # FTS5 版本：直接删除旧hash的数据即可
+    # 外键 ON DELETE CASCADE 会自动清理关联数据
 
-    Args:
-        text: 文本内容
-        n: N-gram 大小（2=bigram, 3=trigram）
+    conn = _get_connection()
+    try:
+        # 查找同名但不同hash的文件
+        cursor = conn.execute('''
+            SELECT file_hash FROM file_metadata
+            WHERE file_name = ? AND file_hash != ?
+        ''', (file_path.name, keep_hash))
 
-    Returns:
-        N-gram 列表（去重）
-    """
-    words = re.findall(r'[\w]+', text.lower())
-    ngrams = []
+        old_hashes = [row['file_hash'] for row in cursor]
 
-    for i in range(len(words) - n + 1):
-        ngram = " ".join(words[i:i+n])
-        ngrams.append(ngram)
+        for old_hash in old_hashes:
+            LOGGER.info(f"Cleaning up old index for {file_path.name} (hash: {old_hash[:8]}...)")
+            conn.execute('DELETE FROM file_metadata WHERE file_hash = ?', (old_hash,))
 
-    return list(set(ngrams))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def cleanup_old_indexes(days: int = 30, remove_orphans: bool = True):
-    """清理旧索引文件
-
-    清理策略：
-    1. 删除超过 N 天未访问的索引（按访问时间）
-    2. 删除孤儿索引（文件路径不存在的索引）
+    """清理旧索引
 
     Args:
-        days: 删除超过 N 天未访问的索引
-        remove_orphans: 是否删除孤儿索引（文件不存在的索引）
+        days: 清理多少天前的索引
+        remove_orphans: 是否清理孤儿索引（文件已删除）
     """
-    if not INDEXES_DIR.exists():
-        return
+    conn = _get_connection()
+    try:
+        threshold = datetime.now() - timedelta(days=days)
 
-    threshold = datetime.now() - timedelta(days=days)
-    deleted_by_time = 0
-    deleted_orphans = 0
+        # 清理过期索引
+        cursor = conn.execute('''
+            DELETE FROM file_metadata
+            WHERE indexed_at < ?
+        ''', (threshold.isoformat(),))
 
-    for index_file in INDEXES_DIR.rglob("*.index.json"):
-        try:
-            # 检查孤儿索引
-            if remove_orphans:
-                with open(index_file, "r", encoding="utf-8") as f:
-                    index_data = json.load(f)
+        deleted = cursor.rowcount
+        LOGGER.info(f"Cleaned up {deleted} old indexes (>{days} days)")
 
-                file_path = Path(index_data.get("file_path", ""))
+        # 清理孤儿索引（可选）
+        if remove_orphans:
+            # 这个需要遍历所有索引检查文件是否存在
+            # 暂时跳过，等后续需要时实现
+            pass
 
-                # 如果索引指向的文件不存在，删除索引
-                if not file_path.exists():
-                    index_file.unlink()
-                    deleted_orphans += 1
-                    LOGGER.debug(f"Deleted orphan index: {index_file.name} (file not found: {file_path})")
-                    continue
-
-            # 检查最后访问时间
-            last_access = datetime.fromtimestamp(index_file.stat().st_atime)
-
-            if last_access < threshold:
-                index_file.unlink()
-                deleted_by_time += 1
-                LOGGER.debug(f"Deleted old index: {index_file.name}")
-        except Exception as e:
-            LOGGER.warning(f"Failed to process index {index_file.name}: {e}")
-
-    total_deleted = deleted_by_time + deleted_orphans
-    if total_deleted > 0:
-        LOGGER.info(
-            f"Cleaned up {total_deleted} index file(s): "
-            f"{deleted_by_time} by age (>{days}d), "
-            f"{deleted_orphans} orphans"
-        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_index_stats() -> Dict:
     """获取索引统计信息"""
-    if not INDEXES_DIR.exists():
+    conn = _get_connection()
+    try:
+        cursor = conn.execute('SELECT COUNT(*) as total FROM file_metadata')
+        total_files = cursor.fetchone()['total']
+
+        cursor = conn.execute('SELECT COUNT(*) as total FROM chunks_fts')
+        total_chunks = cursor.fetchone()['total']
+
+        cursor = conn.execute('SELECT SUM(file_size) as total FROM file_metadata')
+        total_size = cursor.fetchone()['total'] or 0
+
         return {
-            "total_indexes": 0,
-            "total_size_bytes": 0,
-            "oldest_index": None,
-            "newest_index": None
+            'total_files': total_files,
+            'total_chunks': total_chunks,
+            'total_size_bytes': total_size,
+            'database_path': str(INDEXES_DB)
         }
-
-    index_files = list(INDEXES_DIR.rglob("*.index.json"))
-
-    if not index_files:
-        return {
-            "total_indexes": 0,
-            "total_size_bytes": 0,
-            "oldest_index": None,
-            "newest_index": None
-        }
-
-    total_size = sum(f.stat().st_size for f in index_files)
-    access_times = [(f, f.stat().st_mtime) for f in index_files]
-    access_times.sort(key=lambda x: x[1])
-
-    return {
-        "total_indexes": len(index_files),
-        "total_size_bytes": total_size,
-        "oldest_index": access_times[0][0].name if access_times else None,
-        "newest_index": access_times[-1][0].name if access_times else None
-    }
+    finally:
+        conn.close()

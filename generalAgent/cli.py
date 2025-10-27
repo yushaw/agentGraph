@@ -123,11 +123,15 @@ class GeneralAgentCLI(BaseCLI):
         )
 
         # ========== Step 3: Handle @mentions ==========
+        # Update state with mentions:
+        # - new_mentioned_agents: Current turn only (for reminder generation)
+        # - mentioned_agents: Cumulative history (append new mentions)
+        state["new_mentioned_agents"] = mentions if mentions else []
+
         if mentions:
             self.logger.info(f"Detected @mentions: {mentions}")
             print(f"[检测到 @{', @'.join(mentions)}]")
 
-            # Update state with mentions
             existing_mentions = state.get("mentioned_agents", [])
             all_mentions = list(set(existing_mentions + mentions))
             state["mentioned_agents"] = all_mentions
@@ -218,7 +222,14 @@ class GeneralAgentCLI(BaseCLI):
         state["messages"] = messages
         # Convert ProcessedFile dataclass to dict for JSON serialization
         from dataclasses import asdict
-        state["uploaded_files"] = [asdict(f) for f in processed_files]
+
+        # Update file tracking:
+        # - new_uploaded_files: Current turn only (for reminder generation)
+        # - uploaded_files: Cumulative history (append new files)
+        state["new_uploaded_files"] = [asdict(f) for f in processed_files]
+        if processed_files:
+            existing_files = state.get("uploaded_files", [])
+            state["uploaded_files"] = existing_files + [asdict(f) for f in processed_files]
 
         # ========== Step 6: Execute agent ==========
         start_index = len(messages)

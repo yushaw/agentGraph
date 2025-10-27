@@ -190,7 +190,7 @@ python tests/run_tests.py coverage
 - `tests/e2e/` - Complete business workflow tests
 - `tests/fixtures/` - Test infrastructure (test MCP servers, etc.)
 
-**For detailed testing guidelines**, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md)
+**For detailed testing guidelines**, see [docs/TESTING.md](docs/TESTING.md)
 
 ## Architecture
 
@@ -211,7 +211,7 @@ START → agent ⇄ tools → agent → finalize → END
 - `todos`: Task tracking list (via TodoWrite tool)
 - `mentioned_agents`: @mention tracking for tools/skills/agents
 - `active_skill`, `allowed_tools`: Skill context
-- `context_id`, `parent_context`: Subagent isolation
+- `context_id`, `parent_context`: Delegated agent isolation
 - `loops`, `max_loops`: Loop control
 
 **Model Registry** (generalAgent/models/registry.py)
@@ -244,7 +244,7 @@ START → agent ⇄ tools → agent → finalize → END
 - Three types:
   - `@tool` - Load specific tool on demand
   - `@skill` - Generate reminder to read SKILL.md
-  - `@agent` - Load call_subagent tool
+  - `@agent` - Load delegate_task tool
 - Mentions parsed in main.py and classified in planner.py
 
 **KV Cache Optimization** ⭐ NEW (generalAgent/graph/nodes/planner.py, finalize.py)
@@ -252,7 +252,7 @@ START → agent ⇄ tools → agent → finalize → END
 - **Minute-level timestamp**: `<current_datetime>YYYY-MM-DD HH:MM UTC</current_datetime>` placed at bottom of SystemMessage
 - **Reminders moved to last message**: Dynamic reminders (TODOs, @mentions, file uploads) appended to last HumanMessage instead of SystemMessage
 - **Result**: 70-90% KV Cache reuse, 60-80% cost reduction in multi-turn conversations
-- See `docs/CONTEXT_MANAGEMENT.md` for detailed explanation
+- See [docs/OPTIMIZATION.md - Part 1](docs/OPTIMIZATION.md#part-1-context-management--kv-cache-optimization) for detailed explanation
 
 ### Important Files
 
@@ -393,126 +393,6 @@ run_bash_command("python skills/pdf/scripts/extract_form_field_info.py uploads/f
 - Use `read_file` when: Want to see document content/preview
 - Use `search_file` when: Looking for specific keywords or information within a file
 - For large documents: Always prefer `search_file` over `read_file` for finding specific content
-
-## HITL (Human-in-the-Loop)
-
-GeneralAgent supports two core HITL patterns for interactive agent workflows:
-
-### 1. ask_human Tool - Agent Requests User Input
-
-The `ask_human` tool allows the Agent to actively request information from the user when needed.
-
-**Tool interface:**
-```python
-ask_human(
-    question="Your question here",
-    context="Why this information is needed",  # Optional
-    input_type="text",  # Currently only "text" supported
-    default=None,  # Optional default value
-    required=True  # Whether answer is required
-)
-```
-
-**Example usage:**
-```
-User> 帮我订个酒店
-Agent> [calls ask_human tool]
-
-💡 需要知道城市才能搜索酒店
-💬 您想预订哪个城市的酒店？
-> 北京
-
-Agent> 好的，正在搜索北京的酒店...
-```
-
-**How it works:**
-- Agent decides to call `ask_human` via LLM decision (just like any other tool)
-- Graph execution pauses (LangGraph `interrupt()`)
-- User provides input via CLI
-- Answer is returned as ToolMessage and added to LLM context
-- Agent continues with the answer
-
-### 2. Tool Approval - System Intercepts Dangerous Operations
-
-Dangerous tool operations automatically trigger user approval before execution.
-
-**Configuration:** `generalAgent/config/hitl_rules.yaml`
-
-```yaml
-global:
-  enabled: true
-  default_action: allow
-
-tools:
-  run_bash_command:
-    enabled: true
-    patterns:
-      high_risk:
-        - "rm\\s+-rf"           # Force delete
-        - "sudo"                # Privilege escalation
-      medium_risk:
-        - "curl"                # Network requests
-        - "pip\\s+install"      # Package installation
-    actions:
-      high_risk: require_approval
-      medium_risk: require_approval
-```
-
-**Example approval flow:**
-```
-User> @run_bash_command 帮我执行 rm -rf /tmp/test
-Agent> [attempts to call run_bash_command]
-
-🛡️  工具审批: run_bash_command
-   原因: 匹配high_risk风险模式: rm\s+-rf
-   参数: command="rm -rf /tmp/test"
-   批准? [y/n] > n
-
-✗ 已拒绝
-Agent> 出于安全考虑，系统阻止了执行 rm -rf 命令...
-```
-
-**How it works:**
-- Agent calls a tool normally (LLM decision)
-- `ApprovalToolNode` intercepts the call before execution
-- `ApprovalChecker` analyzes tool arguments against rules
-- If risky, triggers `interrupt()` for user approval
-- Approval/rejection is transparent to LLM (not in conversation history)
-- If approved, tool executes normally
-- If rejected, returns error ToolMessage to LLM
-
-**Three-layer approval rules:**
-1. **Config file** (`hitl_rules.yaml`) - Regex pattern matching
-2. **Tool custom checkers** - Programmatic rules registered via `ApprovalChecker.register_checker()`
-3. **Built-in defaults** - Hardcoded safety rules in `approval_checker.py`
-
-### HITL Architecture
-
-**Key Components:**
-
-1. **ApprovalChecker** (`generalAgent/hitl/approval_checker.py`)
-   - Examines tool arguments for risk patterns
-   - Returns `ApprovalDecision` with risk level and reason
-   - Supports regex pattern matching and custom checkers
-
-2. **ApprovalToolNode** (`generalAgent/hitl/approval_node.py`)
-   - Wraps LangGraph `ToolNode`
-   - Intercepts tool calls before execution
-   - Triggers `interrupt()` if approval needed
-   - Returns rejection ToolMessage if user declines
-
-3. **CLI Interrupt Handling** (`generalAgent/cli.py`)
-   - After each `astream()`, checks for interrupts via `aget_state()`
-   - Handles two interrupt types: `user_input_request` and `tool_approval`
-   - Resumes execution with `Command(resume=value)`
-   - Minimal UI prompts (极简版)
-
-4. **LangGraph Checkpointer**
-   - Required for interrupt/resume functionality
-   - Currently uses `MemorySaver` (in-memory, session-scoped)
-   - Can be upgraded to `AsyncSqliteSaver` for persistent checkpointing
-
-**Note:** Approval decisions are NOT added to LLM conversation history - they're purely system-level behavior. Only tool results (approved execution or rejection message) are visible to the LLM.
 
 ## Skill Configuration
 
@@ -972,6 +852,93 @@ LANGSMITH_API_KEY=your-key
 
 ## Recent Fixes
 
+### TODO Tool State Synchronization (2025-10-27)
+
+**Issue**: `todo_write` tool was not updating `state["todos"]`, making task tracking non-functional.
+
+**Root Cause**:
+- `todo_write` returned plain `dict`, which LangGraph's ToolNode wrapped in ToolMessage
+- The "todos" field in tool result was lost - never synced to `state["todos"]`
+- TODO reminders always showed empty list, preventing task tracking
+- Only displayed current+next task (not all incomplete tasks)
+
+**Fixed**:
+1. **todo_write Tool Refactor** - `generalAgent/tools/builtin/todo_write.py`
+   - Changed return type from `dict` to `Command` object (LangGraph official pattern)
+   - Added `InjectedToolCallId` parameter for proper tool call tracking
+   - Explicitly update `state["todos"]` via `Command.update`
+   - Return ToolMessage with success/error feedback
+
+2. **TODO Reminder Enhancement** - `generalAgent/graph/nodes/planner.py:190-234`
+   - Changed from "current + next" display to **show ALL incomplete tasks**
+   - Group by status: `[进行中]` and `[待完成]`
+   - Show priority tags for non-medium priorities: `[high]`, `[low]`
+   - Display completed count without listing all (save tokens)
+
+3. **Comprehensive Test Coverage** - `tests/unit/test_todo_tools.py`
+   - 9 tests for todo_write: Command return, validation, state updates
+   - 3 tests for todo_read: empty state, tasks, context isolation
+   - 4 tests for reminder display: all tasks, priority tags, completion
+   - **Result**: 16/16 tests passing ✅
+
+**Code Change**:
+```python
+# Before (broken)
+@tool
+def todo_write(todos: List[dict]) -> dict:
+    return {"ok": True, "todos": todos}  # ❌ Lost in ToolMessage
+
+# After (working)
+@tool
+def todo_write(
+    todos: List[dict],
+    tool_call_id: Annotated[str, InjectedToolCallId]
+) -> Command:
+    return Command(
+        update={
+            "todos": todos,  # ✅ Explicitly updates state["todos"]
+            "messages": [ToolMessage(..., tool_call_id=tool_call_id)]
+        }
+    )
+```
+
+**Reminder Display**:
+```xml
+<!-- Before: Only current + next -->
+<system_reminder>
+⚠️ 任务追踪: 当前: 任务A | 下一个: 任务B | (还有 3 个待办)
+</system_reminder>
+
+<!-- After: All incomplete tasks -->
+<system_reminder>
+⚠️ 任务追踪 (4 个未完成):
+  [进行中] 任务A
+  [待完成] 任务B [high]
+  [待完成] 任务C
+  [待完成] 任务D [low]
+  (已完成 2 个)
+
+完成所有任务后再停止！
+</system_reminder>
+```
+
+**Impact**:
+- ✅ `state["todos"]` now correctly synchronized after each `todo_write` call
+- ✅ Agent can see full task list and plan accordingly
+- ✅ TODO reminders properly prevent premature task termination
+- ✅ Session persistence works correctly (todos are saved/restored)
+- ✅ Compatible with both ToolNode and ApprovalToolNode (HITL system)
+
+**Files Modified**:
+- `generalAgent/tools/builtin/todo_write.py` - Command-based state update
+- `generalAgent/graph/nodes/planner.py` - Enhanced reminder display
+- `tests/unit/test_todo_tools.py` - Comprehensive test suite (new file)
+- `CHANGELOG.md` - Detailed technical explanation
+
+**Test**: `tests/unit/test_todo_tools.py` (16/16 passing)
+
+---
+
 ### Skills Configuration Management (2025-10-27)
 
 **Issue**: Skills catalog showed all scanned skills regardless of `skills.yaml` configuration, and file upload hints were hardcoded.
@@ -1026,3 +993,81 @@ LANGSMITH_API_KEY=your-key
 - **Added**: Automatic cleanup of workspaces >7 days old on program exit
 - **Added**: `/clean` command for manual cleanup
 - **Files**: `main.py:241-249` (command), `main.py:459-468` (auto-cleanup)
+
+## Documentation Structure
+
+The project documentation has been reorganized (2025-10-27) for better clarity and maintainability:
+
+### Core Documentation (docs/)
+
+**Six core documents** replacing the previous 14-document structure:
+
+1. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** - System architecture and design
+   - Core architecture (Agent Loop, State, Nodes, Routing)
+   - Tool system (Three-tier, Discovery, Configuration, TODO tools)
+   - Skill system (Knowledge packages, Registry, Dependencies)
+   - Best practices (Path handling, Prompt engineering, Error handling)
+
+2. **[docs/FEATURES.md](docs/FEATURES.md)** - User-facing features
+   - Workspace isolation
+   - @Mention system
+   - File upload
+   - Message history
+   - Delegated agent system
+   - MCP integration
+   - HITL (Human-in-the-Loop)
+
+3. **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Development guide
+   - Environment setup
+   - Developing tools
+   - Developing skills
+   - Extending the system
+   - Best practices
+   - Debugging
+
+4. **[docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)** - Performance optimization
+   - Context management & KV Cache (70-90% reuse)
+   - Document search optimization
+   - Text indexer (SQLite FTS5)
+   - Other optimizations
+
+5. **[docs/TESTING.md](docs/TESTING.md)** - Testing guide
+   - Four-tier test architecture
+   - Unit, Integration, E2E tests
+   - HITL testing
+   - Test development guidelines
+
+6. **[docs/README.md](docs/README.md)** - Documentation index & maintenance guide
+   - Quick navigation
+   - Update procedures
+   - Finding information
+   - Contributing guidelines
+
+### Language Versions
+
+Documentation is available in both English and Chinese:
+- **English**: [docs/en/](docs/en/) - Full English documentation
+- **Chinese**: [docs/](docs/) - 中文文档（默认）
+- All six core documents are fully translated
+- Use language switcher links at bottom of each document
+
+### Quick Links
+
+- **Getting Started**: [README.md](README.md) → [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+- **Architecture Overview**: [docs/ARCHITECTURE.md - Part 1](docs/ARCHITECTURE.md)
+- **Feature Guide**: [docs/FEATURES.md](docs/FEATURES.md)
+- **Tool Development**: [docs/DEVELOPMENT.md - Part 2](docs/DEVELOPMENT.md)
+- **Skill Development**: [docs/DEVELOPMENT.md - Part 3](docs/DEVELOPMENT.md)
+- **Testing**: [docs/TESTING.md](docs/TESTING.md)
+- **Performance**: [docs/OPTIMIZATION.md](docs/OPTIMIZATION.md)
+
+### Documentation Maintenance
+
+When updating documentation:
+1. Identify affected documents (see [docs/README.md - Maintenance Guide](docs/README.md#documentation-maintenance-guide))
+2. Update relevant sections with code examples and file paths
+3. Update cross-references
+4. Add entry to CHANGELOG.md
+5. Verify all links and examples
+
+For detailed maintenance procedures, see [docs/README.md](docs/README.md).

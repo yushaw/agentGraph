@@ -49,7 +49,7 @@ PLANNER_SYSTEM_PROMPT = f"""{CHARLIE_BASE_IDENTITY}
 Skills 是知识包（文档），**不是工具**。使用时用 read_file 读取 `skills/{{skill_id}}/SKILL.md` 获取指导。
 
 ### 任务委派
-- **call_subagent**: 将独立子任务委派给专用 agent（隔离上下文，避免主 agent 历史过长）
+- **delegate_task**: 将独立子任务委派给专用 agent（隔离上下文，避免主 agent 历史过长）
   - 何时委派：用户说"分析这个 PDF"、"调试这段代码"等可独立完成的子任务
   - 何时不委派：简单查询（如"读取文件内容"）、当前任务的下一步骤
 
@@ -169,7 +169,7 @@ def build_dynamic_reminder(
 
     if mentioned_agents:
         agents_str = "、".join(mentioned_agents)
-        reminders.append(f"<system_reminder>用户提到了代理：{agents_str}。你可以使用 call_subagent 工具将任务委派给子代理执行。</system_reminder>")
+        reminders.append(f"<system_reminder>用户提到了代理：{agents_str}。你可以使用 delegate_task 工具将任务委派给子代理执行。</system_reminder>")
 
     # if has_images:
     #     reminders.append("<system_reminder>用户分享了图片。使用 vision 能力理解图片内容。</system_reminder>")

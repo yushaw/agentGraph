@@ -119,13 +119,7 @@ def read_file(
         if file_ext in DOCUMENT_EXTENSIONS:
             doc_info = get_document_info(target_path)
 
-            # Small document: extract full content
-            if doc_info["pages"] <= 10:
-                content = extract_full_document(target_path)
-                LOGGER.info(f"Extracted full document: {path} ({len(content)} chars)")
-                return f"=== {path} ===\n{content}"
-
-            # Large document: extract preview
+            # Determine preview limits based on file type
             if file_ext == ".pdf":
                 max_pages = settings.documents.pdf_preview_pages
                 max_chars = settings.documents.pdf_preview_chars
@@ -142,16 +136,18 @@ def read_file(
                 max_pages = 10
                 max_chars = 30000
 
+            # Extract preview (respects configured limits)
             preview = extract_preview(target_path, max_pages, max_chars)
             LOGGER.info(f"Extracted document preview: {path} ({len(preview)} chars)")
 
+            # Limit display to 100 characters
+            display_preview = preview[:100] + "..." if len(preview) > 100 else preview
+
             unit = "pages" if file_ext in [".pdf", ".docx"] else "sheets" if file_ext == ".xlsx" else "slides"
             return (
-                f"=== {path} (Preview: {max_pages}/{doc_info['pages']} {unit}) ===\n"
-                f"{preview}\n\n"
-                f"⚠️ This is a {doc_info['pages']}-{unit[:-1]} document, showing preview only.\n"
-                f"💡 To find specific information:\n"
-                f"   search_file(\"{path}\", \"your search term\")"
+                f"=== {path} ({doc_info['pages']} {unit}) ===\n"
+                f"{display_preview}\n\n"
+                f"💡 Use search_file(\"{path}\", \"keyword\") to find specific content"
             )
 
         # Unsupported file type

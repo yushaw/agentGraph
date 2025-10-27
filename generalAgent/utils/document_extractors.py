@@ -1,18 +1,183 @@
 """Document content extractors for PDF, DOCX, XLSX, PPTX.
 
 提供各种文档类型的文本提取功能，支持预览和完整提取。
+
+分块策略优化（2025-10-27）:
+- Chunk size: 400 字符（约 100-130 tokens 中文，业界最佳实践）
+- Chunk overlap: 80 字符（20% 重叠）
+- 内容感知分块：尊重段落边界，避免在句子中间截断
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List
+
+from generalAgent.config.settings import get_settings
 
 LOGGER = logging.getLogger(__name__)
 
 # 支持的文档类型
 DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx"}
+
+
+def _split_text_with_overlap(text: str, max_size: int, overlap: int) -> List[str]:
+    """将文本分割为带重叠的块（内容感知）
+
+    策略：
+    1. 优先按段落分割（双换行符）
+    2. 如果段落太大，按句子分割（句号、问号、感叹号）
+    3. 如果句子还是太大，按固定长度分割并添加重叠
+
+    Args:
+        text: 原始文本
+        max_size: 最大块大小（字符数）
+        overlap: 重叠大小（字符数）
+
+    Returns:
+        分割后的文本块列表
+    """
+    if len(text) <= max_size:
+        return [text]
+
+    chunks = []
+
+    # 首先按段落分割（双换行或单换行）
+    paragraphs = re.split(r'\n\s*\n|\n', text)
+
+    current_chunk = []
+    current_length = 0
+
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
+        para_len = len(para)
+
+        # 如果单个段落超过 max_size，需要进一步拆分
+        if para_len > max_size:
+            # 保存当前块
+            if current_chunk:
+                chunks.append('\n\n'.join(current_chunk))
+                current_chunk = []
+                current_length = 0
+
+            # 拆分大段落
+            sub_chunks = _split_large_paragraph(para, max_size, overlap)
+            chunks.extend(sub_chunks)
+
+        # 如果加上当前段落会超过限制
+        elif current_length + para_len > max_size:
+            # 保存当前块
+            if current_chunk:
+                chunks.append('\n\n'.join(current_chunk))
+
+            # 计算重叠部分
+            overlap_text = _get_overlap_text(current_chunk, overlap)
+            current_chunk = [overlap_text, para] if overlap_text else [para]
+            current_length = len('\n\n'.join(current_chunk))
+
+        else:
+            # 加入当前块
+            current_chunk.append(para)
+            current_length += para_len + 2  # +2 for '\n\n'
+
+    # 保存最后一个块
+    if current_chunk:
+        chunks.append('\n\n'.join(current_chunk))
+
+    return [c.strip() for c in chunks if c.strip()]
+
+
+def _split_large_paragraph(paragraph: str, max_size: int, overlap: int) -> List[str]:
+    """拆分大段落（按句子或固定长度）"""
+    # 尝试按句子分割（中文和英文）
+    sentences = re.split(r'([。！？\.!?])', paragraph)
+
+    # 重新组合句子和标点
+    reformed_sentences = []
+    for i in range(0, len(sentences) - 1, 2):
+        if i + 1 < len(sentences):
+            reformed_sentences.append(sentences[i] + sentences[i + 1])
+        else:
+            reformed_sentences.append(sentences[i])
+
+    # 如果没有成功分割，回退到固定长度
+    if len(reformed_sentences) <= 1:
+        return _split_fixed_size(paragraph, max_size, overlap)
+
+    # 合并短句子
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for sentence in reformed_sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        sent_len = len(sentence)
+
+        if sent_len > max_size:
+            # 单个句子就超过限制，固定长度切分
+            if current_chunk:
+                chunks.append(''.join(current_chunk))
+                current_chunk = []
+                current_length = 0
+
+            chunks.extend(_split_fixed_size(sentence, max_size, overlap))
+
+        elif current_length + sent_len > max_size:
+            if current_chunk:
+                chunks.append(''.join(current_chunk))
+
+            # 添加重叠
+            overlap_text = _get_overlap_text(current_chunk, overlap)
+            current_chunk = [overlap_text, sentence] if overlap_text else [sentence]
+            current_length = len(''.join(current_chunk))
+
+        else:
+            current_chunk.append(sentence)
+            current_length += sent_len
+
+    if current_chunk:
+        chunks.append(''.join(current_chunk))
+
+    return [c.strip() for c in chunks if c.strip()]
+
+
+def _split_fixed_size(text: str, max_size: int, overlap: int) -> List[str]:
+    """按固定大小分割文本（带重叠）"""
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        end = min(start + max_size, text_len)
+        chunk = text[start:end].strip()
+
+        if chunk:
+            chunks.append(chunk)
+
+        # 下一个块的起始位置（考虑重叠）
+        start = end - overlap if end < text_len else text_len
+
+    return chunks
+
+
+def _get_overlap_text(chunks: List[str], overlap_size: int) -> str:
+    """从之前的块中提取重叠文本"""
+    if not chunks:
+        return ""
+
+    combined = '\n\n'.join(chunks)
+    if len(combined) <= overlap_size:
+        return combined
+
+    return combined[-overlap_size:]
 
 
 def get_document_info(file_path: Path) -> Dict:
@@ -103,84 +268,103 @@ def chunk_document(file_path: Path) -> List[Dict]:
 
 def _get_pdf_info(file_path: Path) -> Dict:
     """获取 PDF 信息"""
-    import pdfplumber
+    import fitz  # PyMuPDF
 
-    with pdfplumber.open(file_path) as pdf:
-        total_chars = sum(len(page.extract_text() or "") for page in pdf.pages)
-        return {
-            "pages": len(pdf.pages),
-            "chars": total_chars,
-            "type": "pdf"
-        }
+    doc = fitz.open(file_path)
+    total_chars = sum(len(page.get_text()) for page in doc)
+    result = {
+        "pages": len(doc),
+        "chars": total_chars,
+        "type": "pdf"
+    }
+    doc.close()
+    return result
 
 
 def _extract_pdf_preview(file_path: Path, max_pages: int, max_chars: int) -> str:
     """提取 PDF 前 N 页"""
-    import pdfplumber
+    import fitz  # PyMuPDF
 
+    doc = fitz.open(file_path)
     pages_content = []
     total_chars = 0
 
-    with pdfplumber.open(file_path) as pdf:
-        for i, page in enumerate(pdf.pages[:max_pages], 1):
-            text = page.extract_text() or ""
+    for i in range(min(max_pages, len(doc))):
+        page = doc[i]
+        text = page.get_text()
 
-            # 检查是否超过字符限制
-            if total_chars + len(text) > max_chars:
-                # 截断当前页
-                remaining = max_chars - total_chars
-                if remaining > 0:
-                    pages_content.append(f"=== Page {i} ===\n{text[:remaining]}...")
-                break
+        # 检查是否超过字符限制
+        if total_chars + len(text) > max_chars:
+            # 截断当前页
+            remaining = max_chars - total_chars
+            if remaining > 0:
+                pages_content.append(f"=== Page {i+1} ===\n{text[:remaining]}...")
+            break
 
-            pages_content.append(f"=== Page {i} ===\n{text}")
-            total_chars += len(text)
+        pages_content.append(f"=== Page {i+1} ===\n{text}")
+        total_chars += len(text)
 
+    doc.close()
     return "\n\n".join(pages_content)
 
 
 def _extract_pdf_full(file_path: Path) -> str:
     """提取 PDF 完整内容"""
-    import pdfplumber
+    import fitz  # PyMuPDF
 
+    doc = fitz.open(file_path)
     pages_content = []
 
-    with pdfplumber.open(file_path) as pdf:
-        for i, page in enumerate(pdf.pages, 1):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages_content.append(f"=== Page {i} ===\n{text}")
+    for i, page in enumerate(doc, 1):
+        text = page.get_text()
+        if text.strip():
+            pages_content.append(f"=== Page {i} ===\n{text}")
 
+    doc.close()
     return "\n\n".join(pages_content)
 
 
 def _chunk_pdf(file_path: Path) -> List[Dict]:
-    """PDF 按页分块"""
-    import pdfplumber
+    """PDF 分块（内容感知 + 重叠）
+
+    策略：
+    1. 提取每一页的文本
+    2. 使用内容感知分块（按段落/句子）
+    3. 添加 20% 重叠
+    4. 保留页码信息用于引用
+    """
+    import fitz  # PyMuPDF
+
+    settings = get_settings()
+    max_size = settings.documents.chunk_max_size
+    overlap = settings.documents.chunk_overlap
+    min_size = settings.documents.chunk_min_size
 
     chunks = []
+    chunk_id = 0
 
-    with pdfplumber.open(file_path) as pdf:
-        for i, page in enumerate(pdf.pages, 1):
-            # 提取文本
-            text = page.extract_text() or ""
+    doc = fitz.open(file_path)
+    for page_num, page in enumerate(doc, 1):
+        # 提取文本
+        text = page.get_text()
 
-            # 提取表格
-            tables = page.extract_tables()
-            if tables:
-                text += "\n\n[Tables]\n"
-                for table in tables:
-                    for row in table:
-                        text += " | ".join(str(cell or "") for cell in row) + "\n"
+        if not text.strip():
+            continue
 
-            if text.strip():
+        # 使用内容感知分块
+        page_chunks = _split_text_with_overlap(text, max_size, overlap)
+
+        for chunk_text in page_chunks:
+            if len(chunk_text) >= min_size:
                 chunks.append({
-                    "id": i - 1,
-                    "page": i,
-                    "text": text.strip(),
+                    "id": chunk_id,
+                    "page": page_num,
+                    "text": chunk_text,
                     "offset": sum(len(c["text"]) for c in chunks)
                 })
+                chunk_id += 1
 
+    doc.close()
     return chunks
 
 
@@ -239,43 +423,44 @@ def _extract_docx_full(file_path: Path) -> str:
 
 
 def _chunk_docx(file_path: Path) -> List[Dict]:
-    """DOCX 按段落分块（合并到 ~1000 chars）"""
+    """DOCX 分块（内容感知 + 重叠）
+
+    策略：
+    1. 提取所有段落
+    2. 使用内容感知分块（尊重段落边界）
+    3. 添加 20% 重叠
+    4. 估算页码用于引用
+    """
     from docx import Document
 
+    settings = get_settings()
+    max_size = settings.documents.chunk_max_size
+    overlap = settings.documents.chunk_overlap
+    min_size = settings.documents.chunk_min_size
+
     doc = Document(file_path)
+
+    # 收集所有文本
+    full_text = "\n\n".join(para.text.strip() for para in doc.paragraphs if para.text.strip())
+
+    if not full_text:
+        return []
+
+    # 使用内容感知分块
+    text_chunks = _split_text_with_overlap(full_text, max_size, overlap)
+
     chunks = []
-    current_chunk = []
-    current_length = 0
-    page_estimate = 1
+    for i, chunk_text in enumerate(text_chunks):
+        if len(chunk_text) >= min_size:
+            # 估算页码（假设每 2000 字符一页）
+            page_estimate = i // 5 + 1
 
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if not text:
-            continue
-
-        # 如果当前块 + 新段落 > 1000 chars，保存当前块
-        if current_length + len(text) > 1000 and current_chunk:
             chunks.append({
-                "id": len(chunks),
+                "id": i,
                 "page": page_estimate,
-                "text": "\n\n".join(current_chunk),
+                "text": chunk_text,
                 "offset": sum(len(c["text"]) for c in chunks)
             })
-            current_chunk = [text]
-            current_length = len(text)
-            page_estimate += 1
-        else:
-            current_chunk.append(text)
-            current_length += len(text)
-
-    # 最后一个块
-    if current_chunk:
-        chunks.append({
-            "id": len(chunks),
-            "page": page_estimate,
-            "text": "\n\n".join(current_chunk),
-            "offset": sum(len(c["text"]) for c in chunks)
-        })
 
     return chunks
 
@@ -362,28 +547,57 @@ def _extract_xlsx_full(file_path: Path) -> str:
 
 
 def _chunk_xlsx(file_path: Path) -> List[Dict]:
-    """XLSX 按 sheet 分块"""
+    """XLSX 分块（按行批次 + 重叠）
+
+    策略：
+    1. 遍历所有 sheets
+    2. 每个 sheet 按 N 行一批进行分块（默认 20 行）
+    3. 添加行重叠（overlap 换算为行数）
+    4. 保留 sheet 名称和行号用于引用
+    """
     import openpyxl
+
+    settings = get_settings()
+    rows_per_chunk = settings.documents.xlsx_rows_per_chunk  # 默认 20 行
+    chunk_overlap_rows = max(1, settings.documents.chunk_overlap // 50)  # 约 2-3 行重叠
 
     wb = openpyxl.load_workbook(file_path, data_only=True, read_only=True)
     chunks = []
+    chunk_id = 0
 
-    for sheet_idx, sheet_name in enumerate(wb.sheetnames, 1):
+    for sheet_name in wb.sheetnames:
         sheet = wb[sheet_name]
 
-        rows = []
+        # 收集所有行
+        all_rows = []
         for row in sheet.iter_rows(values_only=True, max_row=1000):
             row_text = " | ".join(str(cell) if cell is not None else "" for cell in row)
             if row_text.strip():
-                rows.append(row_text)
+                all_rows.append(row_text)
 
-        if rows:
-            chunks.append({
-                "id": sheet_idx - 1,
-                "page": sheet_idx,
-                "text": f"[Sheet: {sheet_name}]\n" + "\n".join(rows),
-                "offset": sum(len(c["text"]) for c in chunks)
-            })
+        if not all_rows:
+            continue
+
+        # 按批次分块（带重叠）
+        start_row = 0
+        while start_row < len(all_rows):
+            end_row = min(start_row + rows_per_chunk, len(all_rows))
+            chunk_rows = all_rows[start_row:end_row]
+
+            if chunk_rows:
+                row_range = f"rows {start_row + 1}-{end_row}"
+                chunk_text = f"[Sheet: {sheet_name}, {row_range}]\n" + "\n".join(chunk_rows)
+
+                chunks.append({
+                    "id": chunk_id,
+                    "page": chunk_id + 1,  # 使用 chunk_id 作为"页码"
+                    "text": chunk_text,
+                    "offset": sum(len(c["text"]) for c in chunks)
+                })
+                chunk_id += 1
+
+            # 下一批的起始位置（考虑重叠）
+            start_row = end_row - chunk_overlap_rows if end_row < len(all_rows) else len(all_rows)
 
     wb.close()
     return chunks
@@ -469,11 +683,23 @@ def _extract_pptx_full(file_path: Path) -> str:
 
 
 def _chunk_pptx(file_path: Path) -> List[Dict]:
-    """PPTX 按幻灯片分块"""
+    """PPTX 分块（按 slide + 大 slide 拆分）
+
+    策略：
+    1. 通常按 slide 分块（一个 slide 一个 chunk）
+    2. 如果 slide 文本超过 max_size，使用内容感知分块
+    3. 保留 slide 编号用于引用
+    """
     from pptx import Presentation
+
+    settings = get_settings()
+    max_size = settings.documents.chunk_max_size
+    overlap = settings.documents.chunk_overlap
+    min_size = settings.documents.chunk_min_size
 
     prs = Presentation(file_path)
     chunks = []
+    chunk_id = 0
 
     for slide_idx, slide in enumerate(prs.slides, 1):
         texts = []
@@ -487,12 +713,32 @@ def _chunk_pptx(file_path: Path) -> List[Dict]:
                 LOGGER.debug(f"Failed to read shape in slide {slide_idx}: {e}")
                 continue
 
-        if texts:
+        if not texts:
+            continue
+
+        slide_text = "\n\n".join(texts)
+
+        # 如果 slide 内容不大，整个 slide 作为一个 chunk
+        if len(slide_text) <= max_size:
             chunks.append({
-                "id": slide_idx - 1,
+                "id": chunk_id,
                 "page": slide_idx,
-                "text": "\n\n".join(texts),
+                "text": slide_text,
                 "offset": sum(len(c["text"]) for c in chunks)
             })
+            chunk_id += 1
+        else:
+            # 大 slide 需要拆分
+            slide_chunks = _split_text_with_overlap(slide_text, max_size, overlap)
+
+            for sub_chunk in slide_chunks:
+                if len(sub_chunk) >= min_size:
+                    chunks.append({
+                        "id": chunk_id,
+                        "page": slide_idx,
+                        "text": sub_chunk,
+                        "offset": sum(len(c["text"]) for c in chunks)
+                    })
+                    chunk_id += 1
 
     return chunks

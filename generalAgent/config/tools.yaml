@@ -18,10 +18,10 @@ core:
     tags: ["meta", "task"]
     description: "Read TODO status"
 
-  call_subagent:
+  delegate_task:
     category: "agent"
     tags: ["agent", "delegation"]
-    description: "Delegate tasks to subagent"
+    description: "Delegate complex multi-step tasks to an isolated agent"
 
   read_file:
     category: "file"

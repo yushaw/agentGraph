@@ -51,7 +51,7 @@ def scan_tools_directory(directory: Path) -> Dict[str, BaseTool]:
 
     for tool_file in tool_files:
         try:
-            # Build full module path (e.g., agentgraph.tools.builtin.call_subagent)
+            # Build full module path (e.g., agentgraph.tools.builtin.delegate_task)
             # This ensures we use the same module instance if it's already imported
             module_name = tool_file.stem
 

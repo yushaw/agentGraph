@@ -1,0 +1,736 @@
+"""Text indexer for document search.
+
+全局索引管理器，支持两种后端：
+- JSON (legacy): 原有的 JSON 索引，BM25 + jieba
+- FTS5 (recommended): SQLite FTS5 全文搜索引擎
+
+**FTS5 特性（2025-10-27）**：
+- ✅ 大小写不敏感：baseline = Baseline = BASELINE
+- ✅ 英文词干提取：baseline = baselines (Porter stemmer)
+- ✅ 中文分词支持：jieba 预处理
+- ✅ 高性能：倒排索引，O(log N) 查询
+- ✅ BM25 排序：FTS5 内置
+
+通过 settings.documents.index_backend 配置切换：
+- "json": 使用原有 JSON 索引
+- "fts5": 使用 SQLite FTS5（推荐）
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import math
+import re
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Optional
+
+from generalAgent.config.project_root import get_project_root
+from generalAgent.config.settings import get_settings
+from generalAgent.utils.document_extractors import chunk_document
+
+LOGGER = logging.getLogger(__name__)
+
+# 全局索引目录
+INDEXES_DIR = get_project_root() / "data" / "indexes"
+
+
+def compute_file_hash(file_path: Path) -> str:
+    """计算文件 MD5 哈希"""
+    md5 = hashlib.md5()
+
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            md5.update(chunk)
+
+    return md5.hexdigest()
+
+
+def get_index_path(file_hash: str) -> Path:
+    """获取索引文件路径（基于文件 MD5）
+
+    Args:
+        file_hash: 文件 MD5 哈希值
+
+    Returns:
+        索引文件路径: data/indexes/{hash[:2]}/{hash}.index.json
+        使用两级目录避免单目录文件过多
+    """
+    # 两级目录：前2个字符作为子目录
+    subdir = file_hash[:2]
+    index_dir = INDEXES_DIR / subdir
+    index_dir.mkdir(parents=True, exist_ok=True)
+
+    return index_dir / f"{file_hash}.index.json"
+
+
+def index_exists(file_path: Path) -> bool:
+    """检查文件是否已索引（且索引有效）"""
+    file_hash = compute_file_hash(file_path)
+    index_path = get_index_path(file_hash)
+
+    if not index_path.exists():
+        return False
+
+    # 检查索引是否过期
+    try:
+        with open(index_path, "r", encoding="utf-8") as f:
+            index_data = json.load(f)
+
+        indexed_at = datetime.fromisoformat(index_data.get("indexed_at", ""))
+        threshold_hours = get_settings().documents.index_stale_threshold_hours
+        stale_threshold = datetime.now() - timedelta(hours=threshold_hours)
+
+        # 如果索引创建时间太久远，认为过期
+        if indexed_at < stale_threshold:
+            LOGGER.info(f"Index for {file_path.name} is stale (>  {threshold_hours}h), will rebuild")
+            return False
+
+        return True
+    except Exception as e:
+        LOGGER.warning(f"Failed to validate index for {file_path.name}: {e}")
+        return False
+
+
+def cleanup_old_indexes_for_file(file_path: Path, keep_hash: str):
+    """清理指定文件路径的旧索引（自动处理同名文件覆盖场景）
+
+    当用户上传同名文件但内容不同时（MD5 不同），会产生孤儿索引。
+    此函数在创建新索引时自动清理旧索引，保持索引目录整洁。
+
+    Args:
+        file_path: 文件路径
+        keep_hash: 要保留的文件哈希（当前版本）
+
+    Example:
+        用户在同一 session 中:
+        1. 上传 report.pdf (hash: abc123) → 创建索引 abc123.index.json
+        2. 上传 report.pdf (hash: def456) → 创建索引 def456.index.json
+        3. 自动删除 abc123.index.json（孤儿索引）
+    """
+    if not INDEXES_DIR.exists():
+        return
+
+    file_path_str = str(file_path)
+    deleted_count = 0
+
+    for index_file in INDEXES_DIR.rglob("*.index.json"):
+        try:
+            with open(index_file, "r", encoding="utf-8") as f:
+                index_data = json.load(f)
+
+            # 如果是同一文件路径，但不是当前哈希，删除旧索引
+            if index_data.get("file_path") == file_path_str:
+                if index_data.get("file_hash") != keep_hash:
+                    index_file.unlink()
+                    deleted_count += 1
+                    LOGGER.debug(f"Deleted old index for {file_path.name}: {index_file.name}")
+        except Exception as e:
+            LOGGER.warning(f"Failed to check index {index_file.name}: {e}")
+
+    if deleted_count > 0:
+        LOGGER.info(f"Cleaned up {deleted_count} old index(es) for {file_path.name}")
+
+
+def create_index(file_path: Path) -> Path:
+    """创建文档搜索索引
+
+    Args:
+        file_path: 文档文件路径
+
+    Returns:
+        索引文件路径
+
+    Raises:
+        Exception: 如果索引创建失败
+    """
+    LOGGER.info(f"Creating search index for {file_path.name}...")
+
+    start_time = datetime.now()
+
+    # 计算文件哈希
+    file_hash = compute_file_hash(file_path)
+
+    # 清理该文件路径的旧索引（处理同名文件覆盖场景）
+    cleanup_old_indexes_for_file(file_path, keep_hash=file_hash)
+
+    # 分块提取文档内容
+    chunks = chunk_document(file_path)
+
+    if not chunks:
+        raise ValueError(f"No content extracted from {file_path.name}")
+
+    # 为每个 chunk 构建搜索索引
+    indexed_chunks = []
+    for chunk in chunks:
+        indexed_chunks.append({
+            "chunk_id": chunk["id"],
+            "page": chunk["page"],
+            "text": chunk["text"],
+
+            # 搜索索引
+            "keywords": extract_keywords(chunk["text"]),
+            "bigrams": extract_ngrams(chunk["text"], n=2),
+            "trigrams": extract_ngrams(chunk["text"], n=3),
+
+            "char_count": len(chunk["text"]),
+            "char_offset": chunk.get("offset", 0)
+        })
+
+    # 构建索引数据
+    index_data = {
+        "file_path": str(file_path),
+        "file_name": file_path.name,
+        "file_type": file_path.suffix,
+        "file_hash": file_hash,
+        "file_size": file_path.stat().st_size,
+
+        "indexed_at": datetime.now().isoformat(),
+        "indexer_version": "1.0",
+
+        "metadata": {
+            "total_pages": len(set(c["page"] for c in chunks)),
+            "total_chunks": len(chunks),
+            "total_chars": sum(c["char_count"] for c in indexed_chunks),
+        },
+
+        "chunks": indexed_chunks,
+
+        # 预留向量检索字段（v2.0）
+        "vector_index_available": False,
+        "vector_model": None,
+        "embeddings_path": None
+    }
+
+    # 保存索引
+    index_path = get_index_path(file_hash)
+
+    with open(index_path, "w", encoding="utf-8") as f:
+        json.dump(index_data, f, ensure_ascii=False, indent=2)
+
+    elapsed = (datetime.now() - start_time).total_seconds()
+    LOGGER.info(
+        f"Index created for {file_path.name}: "
+        f"{len(chunks)} chunks, {index_path.stat().st_size:,} bytes, "
+        f"took {elapsed:.2f}s"
+    )
+
+    return index_path
+
+
+def load_index(file_path: Path) -> Dict:
+    """加载文档索引
+
+    Args:
+        file_path: 文档文件路径
+
+    Returns:
+        索引数据字典
+
+    Raises:
+        FileNotFoundError: 如果索引不存在
+    """
+    file_hash = compute_file_hash(file_path)
+    index_path = get_index_path(file_hash)
+
+    if not index_path.exists():
+        raise FileNotFoundError(f"Index not found for {file_path.name}")
+
+    with open(index_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _compute_bm25_score(
+    term_freq: int,
+    doc_length: int,
+    avg_doc_length: float,
+    total_docs: int,
+    docs_with_term: int,
+    k1: float = 1.2,
+    b: float = 0.75
+) -> float:
+    """计算 BM25 得分（单个词）
+
+    BM25 公式：
+    score(D,Q) = Σ IDF(qi) * (f(qi,D) * (k1+1)) / (f(qi,D) + k1*(1-b+b*|D|/avgdl))
+
+    Args:
+        term_freq: 词在文档中的频率
+        doc_length: 文档长度（词数）
+        avg_doc_length: 平均文档长度
+        total_docs: 总文档数
+        docs_with_term: 包含该词的文档数
+        k1: TF 饱和参数（默认 1.2）
+        b: 文档长度归一化参数（默认 0.75）
+
+    Returns:
+        BM25 得分
+    """
+    # IDF = log((N - df + 0.5) / (df + 0.5) + 1)
+    idf = math.log((total_docs - docs_with_term + 0.5) / (docs_with_term + 0.5) + 1)
+
+    # TF normalization
+    tf_norm = (term_freq * (k1 + 1)) / (term_freq + k1 * (1 - b + b * doc_length / avg_doc_length))
+
+    return idf * tf_norm
+
+
+def _search_with_bm25(
+    index_data: Dict,
+    query: str,
+    max_results: int,
+    k1: float,
+    b: float
+) -> List[Dict]:
+    """使用 BM25 算法搜索
+
+    Args:
+        index_data: 索引数据
+        query: 搜索查询
+        max_results: 最大结果数
+        k1: BM25 k1 参数
+        b: BM25 b 参数
+
+    Returns:
+        匹配的 chunk 列表
+    """
+    chunks = index_data["chunks"]
+
+    if not chunks:
+        return []
+
+    # 预处理查询
+    query_keywords = extract_keywords(query)
+
+    if not query_keywords:
+        return []
+
+    # 计算统计信息
+    total_docs = len(chunks)
+    avg_doc_length = sum(len(c.get("keywords", [])) for c in chunks) / total_docs if total_docs > 0 else 1
+
+    # 计算每个词的文档频率 (DF)
+    term_df = {}
+    for chunk in chunks:
+        chunk_keywords = set(chunk.get("keywords", []))
+        for term in query_keywords:
+            if term in chunk_keywords:
+                term_df[term] = term_df.get(term, 0) + 1
+
+    # 为每个 chunk 计算 BM25 得分
+    matches = []
+
+    for chunk in chunks:
+        chunk_keywords = chunk.get("keywords", [])
+        doc_length = len(chunk_keywords)
+
+        # 计算词频
+        term_freqs = {}
+        for kw in chunk_keywords:
+            term_freqs[kw] = term_freqs.get(kw, 0) + 1
+
+        # 累加 BM25 得分
+        bm25_score = 0
+        matched_terms = []
+
+        for term in query_keywords:
+            if term in term_freqs:
+                tf = term_freqs[term]
+                df = term_df.get(term, 1)
+
+                score = _compute_bm25_score(tf, doc_length, avg_doc_length, total_docs, df, k1, b)
+                bm25_score += score
+                matched_terms.append(term)
+
+        # 短语匹配 bonus（保留多策略的优势）
+        query_lower = query.lower()
+        if query_lower in chunk["text"].lower():
+            bm25_score *= 1.5  # 短语匹配加权 50%
+            matched_terms.append(f"phrase:'{query}'")
+
+        if bm25_score > 0:
+            matches.append({
+                "chunk_id": chunk["chunk_id"],
+                "page": chunk["page"],
+                "text": chunk["text"],
+                "score": round(bm25_score, 2),
+                "matched_keywords": matched_terms[:5]
+            })
+
+    # 按得分排序
+    matches.sort(key=lambda x: x["score"], reverse=True)
+    return matches[:max_results]
+
+
+def _search_with_simple(
+    index_data: Dict,
+    query: str,
+    max_results: int
+) -> List[Dict]:
+    """使用简单多策略评分搜索（原有算法）
+
+    多策略评分系统：
+    - 完整短语匹配: +10 分
+    - 三元词组匹配: +5 分
+    - 二元词组匹配: +3 分
+    - 单关键词精确匹配: +2 分
+    - 单关键词模糊匹配: +1 分
+    - 查询词覆盖率: +0-2 分（bonus）
+    """
+    # 预处理查询
+    query_lower = query.lower()
+    query_keywords = extract_keywords(query)
+    query_bigrams = extract_ngrams(query, n=2)
+    query_trigrams = extract_ngrams(query, n=3)
+
+    # 搜索所有 chunks
+    matches = []
+
+    for chunk in index_data["chunks"]:
+        score = 0
+        matched_keywords = []
+
+        # 策略 1: 完整短语匹配（权重最高）
+        if query_lower in chunk["text"].lower():
+            score += 10
+            matched_keywords.append(f"phrase:'{query}'")
+
+        # 策略 2: 三元词组匹配
+        for trigram in query_trigrams:
+            if trigram in chunk.get("trigrams", []):
+                score += 5
+                matched_keywords.append(f"3-gram:{trigram}")
+
+        # 策略 3: 二元词组匹配
+        for bigram in query_bigrams:
+            if bigram in chunk.get("bigrams", []):
+                score += 3
+                matched_keywords.append(f"2-gram:{bigram}")
+
+        # 策略 4: 单关键词匹配
+        chunk_keywords_set = set(chunk["keywords"])
+        for kw in query_keywords:
+            # 精确匹配
+            if kw in chunk_keywords_set:
+                score += 2
+                matched_keywords.append(kw)
+            # 模糊匹配（子串）
+            elif any(kw in ck or ck in kw for ck in chunk_keywords_set):
+                score += 1
+                matched_keywords.append(f"~{kw}")
+
+        # 策略 5: 查询词覆盖率（bonus）
+        text_lower = chunk["text"].lower()
+        query_words = query_lower.split()
+        matched_count = sum(1 for w in query_words if w in text_lower)
+        coverage = matched_count / len(query_words) if query_words else 0
+        score += coverage * 2  # 最多 +2 分
+
+        if score > 0:
+            matches.append({
+                "chunk_id": chunk["chunk_id"],
+                "page": chunk["page"],
+                "text": chunk["text"],
+                "score": round(score, 2),
+                "matched_keywords": list(set(matched_keywords))[:5]  # 最多显示5个
+            })
+
+    # 按得分排序，返回 Top-K
+    matches.sort(key=lambda x: x["score"], reverse=True)
+    return matches[:max_results]
+
+
+def search_in_index(
+    file_path: Path,
+    query: str,
+    max_results: int = 5
+) -> List[Dict]:
+    """在索引中搜索（支持多种算法）
+
+    支持两种评分算法：
+    1. BM25（标准算法，推荐用于关键词搜索）
+    2. Simple（多策略评分，适合短语和模糊搜索）
+
+    算法通过 settings.documents.search_algorithm 配置
+
+    Args:
+        file_path: 文档文件路径
+        query: 搜索关键词或短语
+        max_results: 最大返回结果数
+
+    Returns:
+        匹配的 chunk 列表，每个包含:
+        - chunk_id: chunk 编号
+        - page: 页码
+        - text: 文本内容
+        - score: 匹配得分
+        - matched_keywords: 匹配的关键词列表
+    """
+    settings = get_settings()
+
+    # 加载索引
+    index_data = load_index(file_path)
+
+    # 根据配置选择算法
+    if settings.documents.search_algorithm == "bm25":
+        LOGGER.debug(f"Using BM25 algorithm (k1={settings.documents.bm25_k1}, b={settings.documents.bm25_b})")
+        return _search_with_bm25(
+            index_data,
+            query,
+            max_results,
+            settings.documents.bm25_k1,
+            settings.documents.bm25_b
+        )
+    else:
+        LOGGER.debug("Using simple multi-strategy algorithm")
+        return _search_with_simple(index_data, query, max_results)
+
+
+def extract_keywords(text: str) -> List[str]:
+    """提取关键词（jieba 分词 + 停用词过滤）
+
+    Args:
+        text: 文本内容
+
+    Returns:
+        关键词列表（去重）
+    """
+    settings = get_settings()
+
+    # 根据配置选择分词方式
+    if settings.documents.use_jieba:
+        try:
+            import jieba
+            # 使用 jieba 分词（中文友好）
+            words = list(jieba.cut_for_search(text.lower()))  # search 模式会生成更多词组
+        except ImportError:
+            LOGGER.warning("jieba not installed, falling back to simple tokenization")
+            # 回退到简单分词
+            words = re.findall(r'[\w]+', text.lower())
+    else:
+        # 简单分词（英文友好）
+        words = re.findall(r'[\w]+', text.lower())
+
+    # 扩展的停用词表（中英文）
+    if settings.documents.remove_stopwords:
+        stopwords = _get_stopwords()
+        # 过滤：停用词 + 长度 < 2
+        keywords = [w for w in words if w not in stopwords and len(w) >= 2]
+    else:
+        # 不过滤停用词，只过滤长度
+        keywords = [w for w in words if len(w) >= 2]
+
+    return list(set(keywords))
+
+
+def _get_stopwords() -> set:
+    """获取停用词列表（中英文）"""
+    return {
+        # 中文常见停用词（扩展版）
+        "的", "了", "在", "是", "和", "有", "与", "及", "等", "为", "将", "对", "由", "从", "这", "那",
+        "个", "我", "你", "他", "她", "它", "们", "也", "都", "把", "被", "给", "让", "到", "着", "过",
+        "于", "向", "以", "而", "则", "且", "或", "但", "可", "能", "就", "会", "要", "得", "其", "之",
+        "所", "其中", "之一", "之后", "之前", "因此", "所以", "如果", "虽然", "但是", "然而", "因为",
+        # 英文常见停用词
+        "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of", "with",
+        "as", "by", "from", "this", "that", "these", "those", "it", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would",
+        "should", "could", "may", "might", "must", "can", "i", "you", "he", "she", "we", "they"
+    }
+
+
+def extract_ngrams(text: str, n: int) -> List[str]:
+    """提取 N-gram（词组，基于 jieba 分词）
+
+    Args:
+        text: 文本内容
+        n: N-gram 大小（2=bigram, 3=trigram）
+
+    Returns:
+        N-gram 列表（去重）
+    """
+    settings = get_settings()
+
+    # 根据配置选择分词方式
+    if settings.documents.use_jieba:
+        try:
+            import jieba
+            # 使用 jieba 分词
+            words = list(jieba.cut(text.lower()))  # 精确模式
+        except ImportError:
+            # 回退到简单分词
+            words = re.findall(r'[\w]+', text.lower())
+    else:
+        words = re.findall(r'[\w]+', text.lower())
+
+    # 过滤单字符词（避免无意义 N-gram）
+    words = [w for w in words if len(w) >= 2]
+
+    ngrams = []
+    for i in range(len(words) - n + 1):
+        ngram = " ".join(words[i:i+n])
+        ngrams.append(ngram)
+
+    return list(set(ngrams))
+
+
+def cleanup_old_indexes(days: int = 30, remove_orphans: bool = True):
+    """清理旧索引文件
+
+    清理策略：
+    1. 删除超过 N 天未访问的索引（按访问时间）
+    2. 删除孤儿索引（文件路径不存在的索引）
+
+    Args:
+        days: 删除超过 N 天未访问的索引
+        remove_orphans: 是否删除孤儿索引（文件不存在的索引）
+    """
+    if not INDEXES_DIR.exists():
+        return
+
+    threshold = datetime.now() - timedelta(days=days)
+    deleted_by_time = 0
+    deleted_orphans = 0
+
+    for index_file in INDEXES_DIR.rglob("*.index.json"):
+        try:
+            # 检查孤儿索引
+            if remove_orphans:
+                with open(index_file, "r", encoding="utf-8") as f:
+                    index_data = json.load(f)
+
+                file_path = Path(index_data.get("file_path", ""))
+
+                # 如果索引指向的文件不存在，删除索引
+                if not file_path.exists():
+                    index_file.unlink()
+                    deleted_orphans += 1
+                    LOGGER.debug(f"Deleted orphan index: {index_file.name} (file not found: {file_path})")
+                    continue
+
+            # 检查最后访问时间
+            last_access = datetime.fromtimestamp(index_file.stat().st_atime)
+
+            if last_access < threshold:
+                index_file.unlink()
+                deleted_by_time += 1
+                LOGGER.debug(f"Deleted old index: {index_file.name}")
+        except Exception as e:
+            LOGGER.warning(f"Failed to process index {index_file.name}: {e}")
+
+    total_deleted = deleted_by_time + deleted_orphans
+    if total_deleted > 0:
+        LOGGER.info(
+            f"Cleaned up {total_deleted} index file(s): "
+            f"{deleted_by_time} by age (>{days}d), "
+            f"{deleted_orphans} orphans"
+        )
+
+
+def get_index_stats() -> Dict:
+    """获取索引统计信息"""
+    if not INDEXES_DIR.exists():
+        return {
+            "total_indexes": 0,
+            "total_size_bytes": 0,
+            "oldest_index": None,
+            "newest_index": None
+        }
+
+    index_files = list(INDEXES_DIR.rglob("*.index.json"))
+
+    if not index_files:
+        return {
+            "total_indexes": 0,
+            "total_size_bytes": 0,
+            "oldest_index": None,
+            "newest_index": None
+        }
+
+    total_size = sum(f.stat().st_size for f in index_files)
+    access_times = [(f, f.stat().st_mtime) for f in index_files]
+    access_times.sort(key=lambda x: x[1])
+
+    return {
+        "total_indexes": len(index_files),
+        "total_size_bytes": total_size,
+        "oldest_index": access_times[0][0].name if access_times else None,
+        "newest_index": access_times[-1][0].name if access_times else None
+    }
+
+
+# ========== Backend Router ==========
+# 根据配置自动路由到 JSON 或 FTS5 后端
+
+def create_index(file_path: Path) -> Path:
+    """创建索引（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import create_index as create_index_fts5
+        return create_index_fts5(file_path)
+    else:
+        # JSON backend (legacy)
+        return _create_index_json(file_path)
+
+
+def search_in_index(file_path: Path, query: str, max_results: int = 5) -> List[Dict]:
+    """搜索索引（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import search_in_index as search_in_index_fts5
+        return search_in_index_fts5(file_path, query, max_results)
+    else:
+        # JSON backend (legacy)
+        return _search_in_index_json(file_path, query, max_results)
+
+
+def index_exists(file_path: Path) -> bool:
+    """检查索引是否存在（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import index_exists as index_exists_fts5
+        return index_exists_fts5(file_path)
+    else:
+        # JSON backend (legacy)
+        return _index_exists_json(file_path)
+
+
+def load_index(file_path: Path) -> Dict:
+    """加载索引（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import load_index as load_index_fts5
+        return load_index_fts5(file_path)
+    else:
+        # JSON backend (legacy)
+        return _load_index_json(file_path)
+
+
+def cleanup_old_indexes(days: int = 30, remove_orphans: bool = True):
+    """清理旧索引（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import cleanup_old_indexes as cleanup_old_indexes_fts5
+        return cleanup_old_indexes_fts5(days, remove_orphans)
+    else:
+        # JSON backend (legacy)
+        return _cleanup_old_indexes_json(days, remove_orphans)
+
+
+def get_index_stats() -> Dict:
+    """获取索引统计（自动路由到配置的后端）"""
+    settings = get_settings()
+
+    if settings.documents.index_backend == "fts5":
+        from generalAgent.utils.text_indexer_fts5 import get_index_stats as get_index_stats_fts5
+        return get_index_stats_fts5()
+    else:
+        # JSON backend (legacy)
+        return _get_index_stats_json()
