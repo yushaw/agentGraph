@@ -211,9 +211,9 @@ def build_planner_node(
 
                 # Strong reminder to prevent early stopping
                 todo_reminder = f"""<system_reminder>
-⚠️ 任务追踪: {' | '.join(todo_lines)}
-使用 todo_read 查看所有任务。完成所有任务后再停止！
-</system_reminder>"""
+                ⚠️ 任务追踪: {' | '.join(todo_lines)}
+                使用 todo_read 查看所有任务。完成所有任务后再停止！
+                </system_reminder>"""
                 LOGGER.info(f"  - Todo reminder: {len(incomplete)} incomplete, {len(completed)} completed")
             elif completed:
                 # All tasks completed
