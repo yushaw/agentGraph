@@ -78,16 +78,21 @@ def build_state_graph(
     graph.add_node("agent", agent_node)
 
     # Tools node with optional approval
+    # IMPORTANT: Use ALL discovered tools (not just enabled ones) for ToolNode
+    # This allows dynamic on-demand loading (e.g., compact_context) to work correctly
+    # The planner controls which tools are visible to the LLM via bind_tools()
+    all_discovered_tools = [tool for tool in tool_registry._discovered.values()]
+
     if approval_checker:
         tools_node = ApprovalToolNode(
-            tools=tool_registry.list_tools(),
+            tools=all_discovered_tools,
             approval_checker=approval_checker,
             enable_approval=True,
         )
     else:
         # Fallback: 如果没有提供 approval_checker，使用原来的 ToolNode
         from langgraph.prebuilt import ToolNode
-        tools_node = ToolNode(tool_registry.list_tools())
+        tools_node = ToolNode(all_discovered_tools)
 
     graph.add_node("tools", tools_node)
     graph.add_node("finalize", finalize_node)

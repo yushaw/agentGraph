@@ -181,6 +181,47 @@ class ObservabilitySettings(BaseSettings):
     )
 
 
+class ContextManagementSettings(BaseSettings):
+    """上下文管理配置
+
+    控制上下文压缩和 Token 管理功能：
+    - enabled: 是否启用上下文管理
+    - info_threshold: 信息提示阈值（75%）
+    - warning_threshold: 警告阈值（85%）
+    - critical_threshold: 强制压缩阈值（95%）
+    - keep_recent_messages: 保留最近消息数
+    - compact_middle_messages: 压缩中间消息数
+    - compression_ratio_threshold: 压缩率阈值（决定策略切换）
+    - compact_cycle_limit: 连续 compact 次数限制
+    - max_history_messages: 硬上限（后备策略）
+    """
+
+    enabled: bool = Field(default=True, alias="CONTEXT_MANAGEMENT_ENABLED")
+
+    # Token 监控阈值
+    # ge 下限 le 上限
+    info_threshold: float = Field(default=0.75, ge=0.5, le=0.95, alias="CONTEXT_INFO_THRESHOLD")
+    warning_threshold: float = Field(default=0.85, ge=0.6, le=0.95, alias="CONTEXT_WARNING_THRESHOLD")
+    critical_threshold: float = Field(default=0.95, ge=0.8, le=0.99, alias="CONTEXT_CRITICAL_THRESHOLD")
+
+    # 分层策略配置
+    keep_recent_messages: int = Field(default=10, ge=5, le=50, alias="CONTEXT_KEEP_RECENT")
+    compact_middle_messages: int = Field(default=30, ge=10, le=100, alias="CONTEXT_COMPACT_MIDDLE")
+
+    # 动态策略决策配置
+    compression_ratio_threshold: float = Field(default=0.4, ge=0.2, le=0.8, alias="CONTEXT_COMPRESSION_RATIO_THRESHOLD")
+    compact_cycle_limit: int = Field(default=3, ge=1, le=10, alias="CONTEXT_COMPACT_CYCLE_LIMIT")
+
+    # Kimi-inspired 后备策略
+    max_history_messages: int = Field(default=100, ge=30, le=200, alias="CONTEXT_MAX_HISTORY")
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class DocumentSettings(BaseModel):
     """Document extraction and search configuration.
 
@@ -246,10 +287,11 @@ class DocumentSettings(BaseModel):
 class Settings(BaseSettings):
     """Root application settings loaded from .env file.
 
-    Hierarchical structure containing four nested settings groups:
+    Hierarchical structure containing five nested settings groups:
     - models: Model routing and API credentials (ModelRoutingSettings)
     - governance: Agent behavior controls (GovernanceSettings)
     - observability: Tracing and logging (ObservabilitySettings)
+    - context: Context management and compression (ContextManagementSettings)
     - documents: Document processing settings (DocumentSettings)
 
     All values are automatically loaded from .env via Pydantic BaseSettings.
@@ -260,6 +302,7 @@ class Settings(BaseSettings):
     models: ModelRoutingSettings = Field(default_factory=ModelRoutingSettings)
     governance: GovernanceSettings = Field(default_factory=GovernanceSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    context: ContextManagementSettings = Field(default_factory=ContextManagementSettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
     model_config = SettingsConfigDict(

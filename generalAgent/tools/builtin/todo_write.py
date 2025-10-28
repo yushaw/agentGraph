@@ -13,29 +13,19 @@ def todo_write(
     todos: List[dict],
     tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> Command:
-    """Track multi-step tasks (3+ steps). Helps user see progress.
+    """Track multi-step tasks (3+ steps). ⚠️ TODO is TRACKING tool, NOT execution tool!
 
-    Use when: Complex multi-step tasks, user requests it, user provides list
-    Don't use: Single task, trivial tasks (<3 steps), conversational requests
-
-    Task states: pending | in_progress | completed
-    Required fields: content, status
-    Optional fields: id (auto-generated if missing), priority (default: medium)
+    Workflow: Create TODO → Execute with tools → Mark completed → Next task
+    ❌ WRONG: Create TODO → Mark all completed (no execution)
 
     Rules:
     - Mark in_progress BEFORE starting work
-    - Mark completed IMMEDIATELY after finishing (don't batch)
+    - EXECUTE using actual tools (web_search, read_file, write_file, delegate_task)
+    - Mark completed AFTER executing (don't mark before executing)
     - Only ONE in_progress at a time
-    - Don't mark completed if tests fail, errors occur, or incomplete
 
     Args:
         todos: List of {content, status, id (optional), priority (optional)}
-
-    Examples:
-        todo_write([
-            {"content": "分析代码", "status": "in_progress"},
-            {"content": "实现功能", "status": "pending"}
-        ])
     """
     # Validate todos
     for todo in todos:

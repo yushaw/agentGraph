@@ -90,3 +90,6 @@ def run_bash_command(
     except Exception as e:
         LOGGER.error(f"Failed to execute command: {e}")
         return f"Error: {str(e)}"
+
+
+__all__ = ["run_bash_command"]

@@ -30,6 +30,7 @@ from generalAgent.utils.logging_utils import (
 )
 from generalAgent.utils.error_handler import with_error_boundary, handle_model_error, ModelInvocationError
 from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
+from generalAgent.context.manager import ContextManager
 
 LOGGER = logging.getLogger("agentgraph.planner")
 
@@ -95,6 +96,9 @@ def build_planner_node(
     async def planner_node(state: AppState) -> AppState:
         log_node_entry(LOGGER, "planner", state)
 
+        # ========== Context Management: Initialize ==========
+        context_manager = ContextManager(settings) if settings.context.enabled else None
+
         # ========== Assemble visible tools ==========
         visible_tools: List[BaseTool] = list(persistent_global_tools)
 
@@ -145,10 +149,10 @@ def build_planner_node(
         # ========== Delegated agent tool filtering ==========
         # Delegated agents should NOT have access to delegate_task (prevent nesting)
         context_id = state.get("context_id", "main")
-        is_delegated = context_id != "main" and context_id.startswith("delegate-")
+        is_delegated = context_id != "main" and context_id.startswith("subagent-")
 
         if is_delegated:
-            # Remove delegate_task from visible tools
+            # Remove delegate_task from visible tools (prevent nesting)
             visible_tools = [t for t in visible_tools if t.name != "delegate_task"]
 
         # ========== Detect capabilities needed ==========
@@ -265,6 +269,62 @@ def build_planner_node(
 
             # Collect all dynamic reminders
             reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder] if r]
+
+            # ========== Context Management: Check token usage and add warning ==========
+            token_warning = ""
+            if context_manager:
+                cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
+                compact_count = state.get("compact_count", 0)
+                last_compression_ratio = state.get("last_compression_ratio")
+
+                # Get model ID for context window lookup
+                model_id = settings.models.base  # Use base model ID
+
+                # Check status
+                from generalAgent.context.token_tracker import TokenTracker
+                tracker = TokenTracker(settings)
+                status = tracker.check_status(
+                    cumulative_prompt_tokens=cumulative_prompt_tokens,
+                    model_id=model_id,
+                    compact_count=compact_count,
+                    last_compression_ratio=last_compression_ratio
+                )
+
+                # Add warning if needed and load compact_context tool
+                if status.level in ["info", "warning"]:
+                    token_warning = status.message
+
+                    # Dynamically load compact_context tool (on-demand loading)
+                    try:
+                        LOGGER.info(f"  - Attempting to load compact_context (is_discovered: {tool_registry.is_discovered('compact_context')})")
+                        compact_tool = tool_registry.load_on_demand("compact_context")
+                        if compact_tool and compact_tool not in visible_tools:
+                            visible_tools.append(compact_tool)
+                            LOGGER.info(f"  - Loaded compact_context tool (token usage: {status.usage_ratio:.1%})")
+                    except KeyError as e:
+                        LOGGER.error(f"compact_context tool not found in discovered tools: {e}")
+                        LOGGER.error(f"  - Available discovered tools: {list(tool_registry._discovered.keys())[:10]}...")
+
+                # If critical (>95%), log warning but don't force compress yet (let agent decide)
+                elif status.level == "critical":
+                    LOGGER.warning(f"  - Token usage CRITICAL: {status.usage_ratio:.1%}, agent should compress ASAP")
+                    token_warning = status.message
+
+                    # Load tool (on-demand loading)
+                    try:
+                        LOGGER.info(f"  - Attempting to load compact_context (is_discovered: {tool_registry.is_discovered('compact_context')})")
+                        compact_tool = tool_registry.load_on_demand("compact_context")
+                        if compact_tool and compact_tool not in visible_tools:
+                            visible_tools.append(compact_tool)
+                            LOGGER.info(f"  - Successfully loaded compact_context tool")
+                    except KeyError as e:
+                        LOGGER.error(f"compact_context tool not found in discovered tools: {e}")
+                        LOGGER.error(f"  - Available discovered tools: {list(tool_registry._discovered.keys())[:10]}...")
+
+            # Add token warning to reminders
+            if token_warning:
+                reminders.append(token_warning)
+
             combined_reminders = "\n\n".join(reminders) if reminders else ""
 
             if combined_reminders:
@@ -313,6 +373,23 @@ def build_planner_node(
 
         LOGGER.info("Planner invocation completed")
 
+        # ========== Context Management: Extract and accumulate tokens ==========
+        cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
+        cumulative_completion_tokens = state.get("cumulative_completion_tokens", 0)
+
+        if context_manager:
+            token_usage = context_manager.tracker.extract_token_usage(output)
+
+            if token_usage:
+                cumulative_prompt_tokens += token_usage.prompt_tokens
+                cumulative_completion_tokens += token_usage.completion_tokens
+
+                LOGGER.info(
+                    f"  - Token usage: Prompt {token_usage.prompt_tokens:,} "
+                    f"(cumulative: {cumulative_prompt_tokens:,}), "
+                    f"Completion {token_usage.completion_tokens:,}"
+                )
+
         # Increment loop counter for Agent Loop tracking
         current_loops = state.get("loops", 0)
         updates = {
@@ -321,6 +398,10 @@ def build_planner_node(
             # Clear one-time reminders (used in this turn, no longer needed)
             "new_uploaded_files": [],  # File upload reminder shown once
             "new_mentioned_agents": [],  # @mention reminder shown once
+            # Update token tracking
+            "cumulative_prompt_tokens": cumulative_prompt_tokens,
+            "cumulative_completion_tokens": cumulative_completion_tokens,
+            "last_prompt_tokens": token_usage.prompt_tokens if context_manager and token_usage else 0,
         }
 
         log_node_exit(LOGGER, "planner", updates)

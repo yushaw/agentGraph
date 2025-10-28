@@ -78,6 +78,13 @@ core:
 # Optional tools - Can be enabled/disabled
 optional:
 
+  compact_context:
+    enabled: false
+    always_available: false
+    category: "meta"
+    tags: ["meta", "context", "compression"]
+    description: "Compress conversation context to save tokens (dynamically loaded when needed)"
+
   http_fetch:
     enabled: true
     always_available: false

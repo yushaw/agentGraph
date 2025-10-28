@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from contextvars import ContextVar
@@ -9,6 +10,7 @@ from typing import Any, Optional
 
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
+from langgraph.types import Command
 
 # Context variable to store app graph (set by runtime)
 _app_graph_ctx: ContextVar[Optional[Any]] = ContextVar("app_graph", default=None)
@@ -24,24 +26,39 @@ def set_app_graph(app_graph):
 
 @tool
 async def delegate_task(task: str, max_loops: int = 50) -> str:
-    """Launch a new isolated agent for complex multi-step tasks. Has access to all tools.
+    """将独立子任务委派给专用子 agent 执行（适合需要多轮迭代的任务）
 
-    Use it for: 
-        researching complex questions, searching web, and executing multi-step tasks.
-        When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries, use this tool to delegate the search
+    ⚠️ **重要：子 agent 在独立上下文中运行**
+    - 子 agent 看不到主对话历史
 
-    Don't use: Reading known files, simple 1-step tasks, non-tool tasks
+    **何时使用：**
+    - 需要多轮工具调用的复杂子任务（深度研究、反复尝试、大文档分析）
+    - 可能产生大量中间结果的任务（网页搜索、多次搜索、批量文件处理），避免污染主对话
 
-    Provide detailed self-contained task description. Specify what to return in final response.
-    Result not visible to user - you must summarize it.
+    **任务描述要求：**
+    必须包含：
+    1. 目标是什么
+    2. 需要哪些上下文信息
+    3. 期望的返回格式（Markdown 表格、JSON、文本摘要等）
 
     Args:
-        task: Detailed task (what to do, what to return, research vs code)
+        task: 详细的任务描述（必须自包含！）
 
     Examples:
-        delegate_task("Find authentication implementation, explain how login works, return function signatures with file paths")
-        delegate_task("Find all API endpoints. List HTTP method, path, handler, file location for each")
-        delegate_task("Locate database connection in config/, db/, models/. Return connection function and explain config")
+        # 深度搜索
+        delegate_task("搜索 src/ 目录下所有使用 old_api() 的代码。"
+                      "要求：记录文件路径、行号、调用上下文。"
+                      "返回：Markdown 表格 [文件 | 行号 | 代码片段]")
+
+        # 反复调试
+        delegate_task("运行脚本 scripts/migrate.py，如果出错则分析并修复，重复直到成功。"
+                      "返回：1) 最终可运行的代码，2) 遇到的问题和解决方案")
+
+        # 大文档分析
+        delegate_task("分析 uploads/report.pdf（80页）："
+                      "1) 提取所有表格数据"
+                      "2) 计算关键指标（收入、支出、利润）"
+                      "返回：结构化 JSON")
     """
     try:
         # Get app graph from context
@@ -53,7 +70,7 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
             }, ensure_ascii=False)
 
         # Generate unique context ID
-        context_id = f"delegate-{uuid.uuid4().hex[:8]}"
+        context_id = f"subagent-{uuid.uuid4().hex[:8]}"
 
         # Create independent state for delegated agent
         delegated_state = {
@@ -79,12 +96,12 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
         # Run delegated agent in isolated context with streaming
         config = {"configurable": {"thread_id": context_id}}
 
-        print(f"\n[delegate-{context_id[:8]}] Starting execution...")
+        print(f"\n[subagent-{context_id[:8]}] Starting execution...")
 
         final_state = None
         message_count = 1  # Start at 1 (user message already there)
 
-        # Use astream for real-time output
+        # Use astream for real-time output with interrupt handling
         async for state_snapshot in app_graph.astream(
             delegated_state,
             config=config,
@@ -108,16 +125,79 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
                     # Print based on type
                     if msg_type in {"ai", "AIMessage"}:
                         if content:
-                            print(f"[delegate-{context_id[:8]}] {content}")
+                            print(f"[subagent-{context_id[:8]}] {content}")
                     elif msg_type in {"tool", "ToolMessage"}:
                         # Print tool calls concisely
                         tool_name = getattr(msg, "name", "tool")
                         if content:
-                            print(f"[delegate-{context_id[:8]}] [tool: {tool_name}] {content[:100]}...")
+                            print(f"[subagent-{context_id[:8]}] [tool: {tool_name}] {content[:100]}...")
 
             message_count = len(current_messages)
 
-        print(f"[delegate-{context_id[:8]}] Completed\n")
+        # Handle interrupts (e.g., ask_human)
+        while True:
+            graph_state = await app_graph.aget_state(config)
+
+            # Check if there are any interrupts
+            if (graph_state.next and graph_state.tasks and
+                hasattr(graph_state.tasks[0], 'interrupts') and
+                graph_state.tasks[0].interrupts):
+
+                # Get interrupt data
+                interrupt_value = graph_state.tasks[0].interrupts[0].value
+                interrupt_type = interrupt_value.get("type", "generic")
+
+                if interrupt_type == "user_input_request":
+                    # Handle ask_human request
+                    question = interrupt_value.get("question", "")
+                    context_info = interrupt_value.get("context", "")
+                    default = interrupt_value.get("default")
+
+                    # Print question with subagent prefix
+                    print()
+                    if context_info:
+                        print(f"[subagent-{context_id[:8]}] 💡 {context_info}")
+                    print(f"[subagent-{context_id[:8]}] 💬 {question}")
+                    if default:
+                        print(f"[subagent-{context_id[:8]}]    (默认: {default})")
+
+                    # Get user input (synchronous in async context)
+                    loop = asyncio.get_event_loop()
+                    answer = await loop.run_in_executor(None, lambda: input("> ").strip())
+
+                    # Handle empty answer
+                    if not answer and default:
+                        answer = default
+                        print(f"[subagent-{context_id[:8]}] ✓ 使用默认值: {default}")
+
+                    # Resume execution with answer
+                    async for state_snapshot in app_graph.astream(
+                        Command(resume=answer),
+                        config=config,
+                        stream_mode="values"
+                    ):
+                        final_state = state_snapshot
+
+                        # Print new messages
+                        current_messages = state_snapshot.get("messages", [])
+                        for idx in range(message_count, len(current_messages)):
+                            msg = current_messages[idx]
+                            if hasattr(msg, "content"):
+                                content = str(msg.content)
+                                msg_type = getattr(msg, "type", msg.__class__.__name__)
+                                if msg_type in {"ai", "AIMessage"} and content:
+                                    print(f"[subagent-{context_id[:8]}] {content}")
+
+                        message_count = len(current_messages)
+                else:
+                    # Unknown interrupt type, skip
+                    print(f"[subagent-{context_id[:8]}] ⚠️ Unknown interrupt type: {interrupt_type}")
+                    break
+            else:
+                # No more interrupts, execution complete
+                break
+
+        print(f"[subagent-{context_id[:8]}] Completed\n")
 
         # Extract result from final message
         if final_state:
@@ -127,6 +207,49 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
                 result_text = getattr(last_message, "content", "No response")
             else:
                 result_text = "No response from delegated agent"
+
+            # Check if result is too brief (< 200 chars), request more detailed summary (max 1 retry)
+            if len(result_text) < 200:
+                print(f"[subagent-{context_id[:8]}] ⚠️ 结果太简短（{len(result_text)} chars），请求更详细的摘要...\n")
+
+                # Create continuation prompt
+                continuation_prompt = HumanMessage(content="""你的上一次回复太简短了（< 200 字符）。
+
+请提供更详细的摘要，包括：
+1. 你做了什么（使用了哪些工具，读取了哪些文件）
+2. 发现了什么（关键信息、错误、解决方案）
+3. 结果是什么（文件路径、函数名、配置等）
+
+**重要**：主 Agent 无法看到你的工具调用历史，只能看到你的最终回复！""")
+
+                # Continue execution with the continuation prompt
+                message_count = len(messages)  # Reset counter for continuation
+                async for state_snapshot in app_graph.astream(
+                    {**final_state, "messages": messages + [continuation_prompt]},
+                    config=config,
+                    stream_mode="values"
+                ):
+                    final_state = state_snapshot
+
+                    # Print new messages
+                    current_messages = state_snapshot.get("messages", [])
+                    for idx in range(message_count, len(current_messages)):
+                        msg = current_messages[idx]
+                        if hasattr(msg, "content"):
+                            content = str(msg.content)
+                            msg_type = getattr(msg, "type", msg.__class__.__name__)
+                            if msg_type in {"ai", "AIMessage"} and content:
+                                print(f"[subagent-{context_id[:8]}] {content}")
+
+                    message_count = len(current_messages)
+
+                print(f"[subagent-{context_id[:8]}] Continuation completed\n")
+
+                # Re-extract the final result
+                messages = final_state.get("messages", [])
+                if messages:
+                    last_message = messages[-1]
+                    result_text = getattr(last_message, "content", "No response")
 
             return json.dumps({
                 "ok": True,
@@ -145,3 +268,6 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
             "ok": False,
             "error": f"Delegated agent execution failed: {str(e)}",
         }, ensure_ascii=False)
+
+
+__all__ = ["delegate_task"]

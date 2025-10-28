@@ -52,3 +52,11 @@ class AppState(TypedDict, total=False):
     workspace_path: Optional[str]  # Isolated workspace directory for this session
     uploaded_files: List[Any]  # All uploaded files (historical record, never cleared)
     new_uploaded_files: List[Any]  # Files uploaded in current turn (for reminder generation, cleared after use)
+
+    # ========== Context management (Token tracking and compression) ==========
+    cumulative_prompt_tokens: int  # Cumulative prompt tokens since last compression
+    cumulative_completion_tokens: int  # Cumulative completion tokens since last compression
+    last_prompt_tokens: int  # Last LLM call's prompt tokens (for logging)
+    compact_count: int  # Number of times context has been compressed
+    last_compact_strategy: Optional[Literal["compact", "summarize"]]  # Last compression strategy used
+    last_compression_ratio: Optional[float]  # Last compression ratio (for dynamic strategy selection)

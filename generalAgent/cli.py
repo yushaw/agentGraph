@@ -494,7 +494,11 @@ class GeneralAgentCLI(BaseCLI):
     # ========== Helper Methods ==========
 
     async def _print_message(self, msg: BaseMessage):
-        """Print a single message with appropriate formatting."""
+        """Print a single message with appropriate formatting.
+
+        For AI messages with both content and tool_calls, prints content first,
+        then tool calls (more natural reading order).
+        """
         # Check if message already printed (avoid duplicates during interrupt/resume)
         msg_id = getattr(msg, "id", None)
         if msg_id and msg_id in self.printed_message_ids:
@@ -502,31 +506,29 @@ class GeneralAgentCLI(BaseCLI):
 
         role, text = self._role_and_text(msg)
 
-        # Print tool calls if present (before text content)
-        if role in {"assistant", "ai"} and hasattr(msg, "tool_calls") and msg.tool_calls:
-            for tool_call in msg.tool_calls:
-                tool_name = tool_call.get("name", "unknown")
-                tool_args = tool_call.get("args", {})
-                # Format args concisely
-                args_str = self._format_tool_args(tool_args)
-                print(f">> [call] {tool_name}({args_str})")
-
-        if not text:
-            # Mark as printed even if no text (to avoid reprinting tool_calls)
-            if msg_id:
-                self.printed_message_ids.add(msg_id)
-            return
-
+        # Handle AI/Assistant messages
         if role in {"assistant", "ai"}:
-            print(f"Agent> {text}")
+            # Print text content first (if present)
+            if text:
+                print(f"Agent> {text}")
+
+            # Then print tool calls (if present)
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tool_call in msg.tool_calls:
+                    tool_name = tool_call.get("name", "unknown")
+                    tool_args = tool_call.get("args", {})
+                    args_str = self._format_tool_args(tool_args)
+                    print(f">> [call] {tool_name}({args_str})")
+
+        # Handle tool result messages
         elif role == "tool":
-            # Keep old tool_id tracking for backward compatibility
             tool_id = getattr(msg, "id", None)
             if tool_id and tool_id in self.printed_tool_ids:
                 return
             if tool_id:
                 self.printed_tool_ids.add(tool_id)
-            print(f"<< [result] {text}")
+            if text:
+                print(f"<< [result] {text}")
 
         # Mark message as printed
         if msg_id:

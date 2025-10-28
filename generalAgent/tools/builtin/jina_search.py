@@ -23,6 +23,7 @@ async def web_search(
     """搜索网页并返回结果的完整内容（Markdown 格式）。用于获取最新信息、查找资料。
 
     使用场景：需要最新信息、超出知识截止日期的内容、查找特定领域资料时使用。
+    重要：上下文占用会很多，建议使用 delegate_task 工具使用子代理进行搜索
 
     参数：
         query: 搜索关键词（如 "Python 最佳实践 2025"）
@@ -140,25 +141,54 @@ async def web_search(
                     }
                     results.append(result)
 
-            # Post-process content with LLM cleaning
+            # Post-process content with LLM cleaning (parallel execution with concurrency limit)
             from generalAgent.tools.content_processors import (
                 get_content_cleaner,
                 run_content_pipeline
             )
+            import asyncio
 
             cleaner = get_content_cleaner()
 
+            # Collect cleaning tasks for parallel execution
+            cleaning_tasks = []
             for result in results:
                 if result.get("content"):
                     context = {
                         "query": query,
                         "url": result.get("url", ""),
                     }
-                    result["content"] = await run_content_pipeline(
+                    task = run_content_pipeline(
                         result["content"],
                         [cleaner],
                         context
                     )
+                    cleaning_tasks.append((result, task))
+
+            # Execute cleaning tasks in parallel with concurrency limit (max 10 concurrent)
+            if cleaning_tasks:
+                # Use semaphore to limit concurrent LLM calls
+                max_concurrent = 10
+                semaphore = asyncio.Semaphore(max_concurrent)
+
+                async def clean_with_semaphore(result, task):
+                    async with semaphore:
+                        return result, await task
+
+                # Run all tasks with semaphore control
+                results_with_cleaned = await asyncio.gather(
+                    *[clean_with_semaphore(result, task) for result, task in cleaning_tasks],
+                    return_exceptions=True
+                )
+
+                # Update results with cleaned content (handle exceptions gracefully)
+                for item in results_with_cleaned:
+                    if isinstance(item, Exception):
+                        # Log error but don't fail entire search
+                        print(f"Content cleaning failed: {str(item)}")
+                        continue
+                    result, cleaned = item
+                    result["content"] = cleaned
 
             output = {
                 "query": query,

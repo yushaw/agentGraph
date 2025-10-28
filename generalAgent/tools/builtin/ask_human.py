@@ -98,3 +98,6 @@ def ask_human(
         return "（用户未提供答案）"
 
     return answer or ""
+
+
+__all__ = ["ask_human"]
