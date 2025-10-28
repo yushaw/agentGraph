@@ -82,7 +82,10 @@ PLANNER_SYSTEM_PROMPT = f"""{CHARLIE_BASE_IDENTITY}
 - **ask_human**: 缺少关键信息时询问用户（如：用户说"订酒店"但没说城市）
 
 ### 文件操作
-修改文件时优先用 **edit_file**（安全），创建新文件用 **write_file**
+- **新文件**：write_file 创建
+- **修改文件**：**优先 edit_file**（old_string → new_string），比 write_file 更安全高效
+- **长文档（>1000字）**：⚠️ 禁止一次性 write_file 全部内容（会被截断）
+  - 正确做法：write_file 创建框架（用 [TBD] 标记） → edit_file 逐节展开
 
 ### 技能系统（Skills）
 Skills 是知识包（文档），**不是工具**。使用时用 read_file 读取 `skills/{{skill_id}}/SKILL.md` 获取指导。

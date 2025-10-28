@@ -70,13 +70,20 @@ core:
     tags: ["network", "read", "web"]
     description: "Fetch web pages and convert to markdown using Jina Reader"
 
-  web_search:
+  search_web:
     category: "network"
-    tags: ["network", "search", "web"]
-    description: "Search the web with LLM-friendly results using Jina Search"
+    tags: ["network", "search", "web", "google"]
+    description: "Search the web using Google Custom Search API (returns title + snippet)"
 
 # Optional tools - Can be enabled/disabled
 optional:
+
+  web_search:
+    enabled: false
+    always_available: false
+    category: "network"
+    tags: ["network", "search", "web", "jina"]
+    description: "Search the web with full content using Jina Search (alternative, slower but more detailed)"
 
   compact_context:
     enabled: false

@@ -165,16 +165,25 @@ def write_file(
     path: Annotated[str, "File path relative to workspace (e.g., 'outputs/result.txt', 'temp/data.json')"],
     content: Annotated[str, "File content to write"]
 ) -> str:
-    """Write/overwrite file in workspace. Creates parent dirs automatically.
+    """Writes a file to the local filesystem.
 
-    Can ONLY write to: uploads/, outputs/, temp/ (NOT skills/)
-    NEVER use ".." or "/" prefix
+    Usage:
+    - This tool will overwrite the existing file if there is one at the provided path
+    - If this is an existing file, you MUST use read_file first. Tool will fail if you did not read first
+    - ALWAYS prefer edit_file for existing files. NEVER write new files unless explicitly required
+    - NEVER proactively create documentation files (*.md, README). Only create if user explicitly requests
+    - LONG content (>1000 words): Write outline with [TBD] markers → edit_file to expand sections
 
-    Use outputs/ for permanent results, temp/ for temporary files
+    Security:
+    - Can ONLY write to: uploads/, outputs/, temp/ (NOT skills/)
+    - NEVER use ".." or "/" prefix
 
     Examples:
-        write_file("outputs/analysis.txt", "Analysis: 42 issues")
-        write_file("temp/data.json", '{"users": 100}')
+        # Create new file with outline
+        write_file("outputs/plan.md", "# Plan\n\n## Phase 1\n[TBD]\n\n## Phase 2\n[TBD]")
+
+        # Then expand with edit_file
+        edit_file("outputs/plan.md", "[TBD]", "- Task 1\n- Task 2")
     """
     try:
         # Security: reject paths with traversal attempts

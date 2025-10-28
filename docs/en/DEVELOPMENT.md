@@ -135,31 +135,36 @@ vim .env
 MODEL_BASIC_API_KEY=                               # Or: MODEL_BASE_API_KEY
 MODEL_BASIC_BASE_URL=https://api.deepseek.com      # Or: MODEL_BASE_BASE_URL
 MODEL_BASIC_ID=deepseek-chat                       # Or: MODEL_BASE_ID
-MODEL_BASIC_CONTEXT_WINDOW=128000                  # Or: MODEL_BASE_CONTEXT_WINDOW
+MODEL_BASIC_CONTEXT_WINDOW=128000                  # Or: MODEL_BASE_CONTEXT_WINDOW (total capacity: input+output)
+MODEL_BASIC_MAX_COMPLETION_TOKENS=4096             # Or: MODEL_BASE_MAX_COMPLETION_TOKENS (max output tokens, prevents tool call truncation, default 2048)
 
 # ===== Reasoning Model (reasoning / deep thinking) =====
 MODEL_REASONING_API_KEY=                           # Or: MODEL_REASON_API_KEY
 MODEL_REASONING_BASE_URL=https://api.deepseek.com  # Or: MODEL_REASON_BASE_URL
 MODEL_REASONING_ID=deepseek-reasoner               # Or: MODEL_REASON_ID
-MODEL_REASONING_CONTEXT_WINDOW=128000              # Or: MODEL_REASON_CONTEXT_WINDOW
+MODEL_REASONING_CONTEXT_WINDOW=128000              # Or: MODEL_REASON_CONTEXT_WINDOW (total capacity: input+output)
+MODEL_REASONING_MAX_COMPLETION_TOKENS=8192         # Or: MODEL_REASON_MAX_COMPLETION_TOKENS (reasoning models need higher output limits, default 2048)
 
 # ===== Multimodal Model (vision understanding) =====
 MODEL_MULTIMODAL_API_KEY=                                    # Or: MODEL_VISION_API_KEY
 MODEL_MULTIMODAL_BASE_URL=https://open.bigmodel.cn/api/paas/v4  # Or: MODEL_VISION_BASE_URL
 MODEL_MULTIMODAL_ID=glm-4.5v                                 # Or: MODEL_VISION_ID
-MODEL_MULTIMODAL_CONTEXT_WINDOW=64000                        # Or: MODEL_VISION_CONTEXT_WINDOW
+MODEL_MULTIMODAL_CONTEXT_WINDOW=64000                        # Or: MODEL_VISION_CONTEXT_WINDOW (total capacity: input+output)
+MODEL_MULTIMODAL_MAX_COMPLETION_TOKENS=4096                  # Or: MODEL_VISION_MAX_COMPLETION_TOKENS (max output tokens, default 2048)
 
 # ===== Code Model (code understanding & generation) =====
 MODEL_CODE_API_KEY=
 MODEL_CODE_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 MODEL_CODE_ID=glm-4.6
-MODEL_CODE_CONTEXT_WINDOW=200000
+MODEL_CODE_CONTEXT_WINDOW=200000                             # Total capacity: input+output
+MODEL_CODE_MAX_COMPLETION_TOKENS=8192                        # Code generation needs higher output limits (default 2048)
 
 # ===== Chat Model (main conversation) =====
 MODEL_CHAT_API_KEY=
 MODEL_CHAT_BASE_URL=https://api.moonshot.cn/v1
 MODEL_CHAT_ID=kimi-k2-0905-preview
-MODEL_CHAT_CONTEXT_WINDOW=256000
+MODEL_CHAT_CONTEXT_WINDOW=256000                             # Total capacity: input+output
+MODEL_CHAT_MAX_COMPLETION_TOKENS=4096                        # Max output tokens (Kimi default 1024 is too low, recommend 4096+, default 2048)
 
 #=============================================================================
 # Jina AI Configuration (for web fetching and search)
@@ -201,7 +206,19 @@ LANGSMITH_API_KEY=                # Or: LANGCHAIN_API_KEY
    - `MODEL_MULTIMODAL_*` = `MODEL_VISION_*`
    - Both naming styles work, system auto-detects
 
-2. **CONTEXT_WINDOW Field**: Used for KV Cache optimization and message history management
+2. **CONTEXT_WINDOW vs MAX_COMPLETION_TOKENS**:
+   - **CONTEXT_WINDOW** (Context Window): Total model capacity limit (input tokens + output tokens)
+     - Used for KV Cache optimization and message history management
+     - Example: Kimi k2's CONTEXT_WINDOW=256000 means input+output combined cannot exceed 256K tokens
+
+   - **MAX_COMPLETION_TOKENS** (Max Completion Tokens): Maximum tokens for a single output (controls output only)
+     - **Key Purpose**: Prevents tool call truncation (incomplete tool call JSON causes parsing failures)
+     - Default: 2048 (if not configured)
+     - **Recommended Values**:
+       - Base/Multimodal models: 4096
+       - Reasoning/Code models: 8192 (need longer outputs)
+       - Kimi API defaults to only 1024, **strongly recommend 4096+**
+     - **Backward Compatibility**: Also supports old naming `MODEL_*_MAX_TOKENS`
 
 3. **Jina AI Configuration**:
    - Powers `fetch_web` and `web_search` tools

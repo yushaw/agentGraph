@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (2025-10-28) - Tool Call Truncation Prevention & File Operation Best Practices
+
+**Enhancement**: Implemented comprehensive solution to prevent tool call truncation and guide agent towards token-efficient file operations following Claude Code patterns.
+
+**Problem Addressed:**
+- Tool calls (especially `write_file`) being truncated due to missing `max_completion_tokens` configuration
+- Example: Kimi API default 1024 tokens → 20-day travel plan truncated → invalid JSON → `JSONDecodeError`
+- Root cause: No `max_completion_tokens` parameter set in model initialization, relying on API defaults (too low)
+- Secondary issue: Agent generated entire long documents in single `write_file` call (inefficient, prone to truncation)
+
+**Changes Made:**
+
+1. **Per-Model max_completion_tokens Configuration** (.env.example, settings.py, model_resolver.py):
+   - Added `MODEL_*_MAX_COMPLETION_TOKENS` for each model slot (base, reason, vision, code, chat)
+   - **Naming**: Uses `max_completion_tokens` for clarity (vs ambiguous `max_tokens`)
+     - Backward compatible: Old `MODEL_*_MAX_TOKENS` naming still works via AliasChoices
+   - Default fallback: 2048 tokens (safe minimum)
+   - Recommended values:
+     - `MODEL_BASIC_MAX_COMPLETION_TOKENS=4096` (tool calls, code generation)
+     - `MODEL_REASONING_MAX_COMPLETION_TOKENS=8192` (reasoning models need more space)
+     - `MODEL_CHAT_MAX_COMPLETION_TOKENS=4096` (Kimi official recommendation: ≥4096)
+   - Each model can override via .env (e.g., `MODEL_CHAT_MAX_COMPLETION_TOKENS=8192`)
+
+   Files modified:
+   - `.env.example`: Added max_completion_tokens config for all 5 models with explanatory comments
+   - `generalAgent/config/settings.py`: Added `*_max_completion_tokens` fields with validation (512-16384) and backward compatibility aliases
+   - `generalAgent/runtime/model_resolver.py`:
+     - Updated `resolve_model_configs()` to include max_completion_tokens
+     - Modified `_chat_kwargs()` to accept and apply max_completion_tokens parameter (passed as `max_tokens` to ChatOpenAI)
+     - Updated `build_model_resolver()` to pass max_completion_tokens from config
+
+2. **write_file Tool Guidance Enhancement** (generalAgent/tools/builtin/file_ops.py):
+   - Added comprehensive docstring following Claude Code patterns:
+     - ⚠️ Best Practice: For NEW files, create outline; for EXISTING files, use edit_file
+     - Why edit_file is better: Token-efficient, never truncated, safer
+     - Examples showing outline-first → edit-to-expand workflow
+   - Clear distinction: write_file for structure, edit_file for content
+
+3. **SystemMessage File Operation Section** (generalAgent/graph/prompts.py):
+   - Streamlined to 5 concise lines emphasizing the core issue
+   - Core message: ⚠️ 禁止一次性 write_file 全部内容（会被截断）
+   - Recommended pattern: write_file 创建框架（用 [TBD] 标记） → edit_file 逐节展开
+   - Removed verbose examples to keep prompt concise and focused
+
+4. **Output Truncation Detection** (generalAgent/graph/nodes/planner.py):
+   - Added `finish_reason` check after model invocation
+   - Warning log when `finish_reason="length"` detected
+   - Error log when invalid_tool_calls present (JSON truncation)
+   - Actionable suggestions: (1) Increase MODEL_*_MAX_COMPLETION_TOKENS, (2) Use edit_file pattern
+
+5. **Comprehensive Test Suite**:
+   - `tests/unit/test_max_completion_tokens_config.py` - Config loading, validation, backward compatibility
+   - `tests/unit/test_file_ops_enhanced.py` - edit_file and write_file behavior, outline-first workflow
+   - `tests/unit/test_finish_reason_detection.py` - Truncation detection, warning/error logging
+   - `tests/e2e/test_long_document_generation_e2e.py` - End-to-end long document generation workflow
+
+6. **Documentation Updates**:
+   - `docs/DEVELOPMENT.md` - Added max_completion_tokens configuration section
+   - `docs/en/DEVELOPMENT.md` - English version updated
+   - `README.md` - Updated via existing CLAUDE.md reference
+
+**Technical Details:**
+
+**CONTEXT_WINDOW vs MAX_COMPLETION_TOKENS**:
+- **CONTEXT_WINDOW**: Total capacity (input tokens + output tokens combined)
+  - Example: Kimi k2 CONTEXT_WINDOW=256000 (total capacity for input+output)
+  - Used for KV Cache optimization and message history management
+- **MAX_COMPLETION_TOKENS**: Maximum output tokens for single response (output only)
+  - Controls model-generated content length (tool calls, code, responses)
+  - Prevents tool call JSON truncation
+  - Default: 2048 (fallback if not configured)
+  - API parameter naming:
+    - OpenAI: `max_tokens` or `max_completion_tokens` (both work)
+    - DeepSeek/Kimi/GLM: `max_tokens` (we pass this internally)
+  - Config naming: `max_completion_tokens` (clearer distinction from context_window)
+
+**Why edit_file Pattern Works**:
+- Token efficiency: Only sends `old_string` + `new_string` (hundreds of tokens vs thousands)
+- Never truncated: Incremental changes always fit within max_completion_tokens
+- Safer: Preserves unchanged content, supports precise modifications
+- Mirrors Claude Code's proven architecture: Write once → Edit many
+
+**Expected Behavior After Fix:**
+- Tool calls will not be truncated (max_completion_tokens properly configured)
+- Agent will prefer outline-first + edit-to-expand for long documents
+- Clear warnings in logs when truncation occurs (with actionable advice)
+- Users can adjust per-model limits via .env
+
+**Files Modified:**
+- `.env.example`
+- `generalAgent/config/settings.py`
+- `generalAgent/runtime/model_resolver.py`
+- `generalAgent/tools/builtin/file_ops.py`
+- `generalAgent/tools/builtin/edit_file.py`
+- `generalAgent/graph/prompts.py`
+- `generalAgent/graph/nodes/planner.py`
+- `docs/DEVELOPMENT.md`
+- `docs/en/DEVELOPMENT.md`
+- `tests/unit/test_max_completion_tokens_config.py` (new)
+- `tests/unit/test_file_ops_enhanced.py` (new)
+- `tests/unit/test_finish_reason_detection.py` (new)
+- `tests/e2e/test_long_document_generation_e2e.py` (new)
+
+**Impact:**
+- ✅ Prevents tool call JSON truncation (root cause fixed)
+- ✅ Guides agent towards token-efficient patterns (Claude Code style)
+- ✅ Better user experience (no more invalid tool calls)
+- ✅ Flexible per-model configuration (production-ready)
+- ✅ Comprehensive test coverage (unit + e2e)
+- ✅ Clear documentation for users
+
+---
+
 ### Fixed (2025-10-28) - TODO System Prompt Enhancement
 
 **Enhancement**: Strengthened TODO system prompts to prevent "update without execution" anti-pattern.

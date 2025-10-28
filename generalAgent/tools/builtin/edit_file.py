@@ -20,23 +20,26 @@ def edit_file(
     new_string: Annotated[str, "The text to replace it with"],
     replace_all: Annotated[bool, "Replace all occurrences (default: False)"] = False
 ) -> str:
-    """Exact string replacement in files. Safer than write_file for targeted edits.
+    """Performs exact string replacements in files.
 
-    MUST use read_file first to see contents
-    old_string must match EXACTLY (whitespace, indentation)
-    Can only edit: outputs/, temp/, uploads/ (NOT skills/)
+    Usage:
+    - MUST use read_file first to see file contents (tool will error otherwise)
+    - old_string must match EXACTLY (preserve indentation, whitespace)
+    - When copying from read_file output, NEVER include line numbers in old_string/new_string
+    - ALWAYS prefer editing existing files. NEVER write new files unless required.
+    - Edit will FAIL if old_string is not unique. Either provide more context or use replace_all=True
+    - Use replace_all for renaming variables/strings across the entire file
 
-    NEVER:
-    - Include line numbers from read_file in old_string/new_string
-    - Use ".." or "/" prefix in path
-
-    Fails if old_string not found or not unique (unless replace_all=True)
+    Security:
+    - Can only edit: outputs/, temp/, uploads/ (NOT skills/)
+    - Never use ".." or "/" prefix in path
 
     Examples:
         read_file("outputs/config.txt")
         edit_file("outputs/config.txt", "port = 8080", "port = 3000")
 
-        edit_file("outputs/data.txt", "foo", "bar", replace_all=True)
+        # Rename variable across file
+        edit_file("outputs/script.py", "old_name", "new_name", replace_all=True)
     """
     try:
         # Validation

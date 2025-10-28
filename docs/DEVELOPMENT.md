@@ -135,31 +135,36 @@ vim .env
 MODEL_BASIC_API_KEY=                               # 或：MODEL_BASE_API_KEY
 MODEL_BASIC_BASE_URL=https://api.deepseek.com      # 或：MODEL_BASE_BASE_URL
 MODEL_BASIC_ID=deepseek-chat                       # 或：MODEL_BASE_ID
-MODEL_BASIC_CONTEXT_WINDOW=128000                  # 或：MODEL_BASE_CONTEXT_WINDOW
+MODEL_BASIC_CONTEXT_WINDOW=128000                  # 或：MODEL_BASE_CONTEXT_WINDOW（总容量：输入+输出）
+MODEL_BASIC_MAX_COMPLETION_TOKENS=4096             # 或：MODEL_BASE_MAX_COMPLETION_TOKENS（最大输出 tokens，防止工具调用被截断，默认 2048）
 
 # ===== 推理模型（reasoning / 深度思考）=====
 MODEL_REASONING_API_KEY=                           # 或：MODEL_REASON_API_KEY
 MODEL_REASONING_BASE_URL=https://api.deepseek.com  # 或：MODEL_REASON_BASE_URL
 MODEL_REASONING_ID=deepseek-reasoner               # 或：MODEL_REASON_ID
-MODEL_REASONING_CONTEXT_WINDOW=128000              # 或：MODEL_REASON_CONTEXT_WINDOW
+MODEL_REASONING_CONTEXT_WINDOW=128000              # 或：MODEL_REASON_CONTEXT_WINDOW（总容量：输入+输出）
+MODEL_REASONING_MAX_COMPLETION_TOKENS=8192         # 或：MODEL_REASON_MAX_COMPLETION_TOKENS（推理模型建议更高的输出限制，默认 2048）
 
 # ===== 多模态模型（图文理解）=====
 MODEL_MULTIMODAL_API_KEY=                                    # 或：MODEL_VISION_API_KEY
 MODEL_MULTIMODAL_BASE_URL=https://open.bigmodel.cn/api/paas/v4  # 或：MODEL_VISION_BASE_URL
 MODEL_MULTIMODAL_ID=glm-4.5v                                 # 或：MODEL_VISION_ID
-MODEL_MULTIMODAL_CONTEXT_WINDOW=64000                        # 或：MODEL_VISION_CONTEXT_WINDOW
+MODEL_MULTIMODAL_CONTEXT_WINDOW=64000                        # 或：MODEL_VISION_CONTEXT_WINDOW（总容量：输入+输出）
+MODEL_MULTIMODAL_MAX_COMPLETION_TOKENS=4096                  # 或：MODEL_VISION_MAX_COMPLETION_TOKENS（最大输出 tokens，默认 2048）
 
 # ===== 代码模型（代码理解与生成）=====
 MODEL_CODE_API_KEY=
 MODEL_CODE_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 MODEL_CODE_ID=glm-4.6
-MODEL_CODE_CONTEXT_WINDOW=200000
+MODEL_CODE_CONTEXT_WINDOW=200000                             # 总容量：输入+输出
+MODEL_CODE_MAX_COMPLETION_TOKENS=8192                        # 代码生成建议更高的输出限制（默认 2048）
 
 # ===== 聊天模型（主对话）=====
 MODEL_CHAT_API_KEY=
 MODEL_CHAT_BASE_URL=https://api.moonshot.cn/v1
 MODEL_CHAT_ID=kimi-k2-0905-preview
-MODEL_CHAT_CONTEXT_WINDOW=256000
+MODEL_CHAT_CONTEXT_WINDOW=256000                             # 总容量：输入+输出
+MODEL_CHAT_MAX_COMPLETION_TOKENS=4096                        # 最大输出 tokens（Kimi 默认 1024 太低，建议 4096+，默认 2048）
 
 #=============================================================================
 # Jina AI 配置（用于网页抓取与搜索）
@@ -201,7 +206,19 @@ LANGSMITH_API_KEY=                # 或：LANGCHAIN_API_KEY
    - `MODEL_MULTIMODAL_*` = `MODEL_VISION_*`
    - 两种写法都可以，系统会自动识别
 
-2. **CONTEXT_WINDOW 字段**：用于 KV Cache 优化和消息历史管理
+2. **CONTEXT_WINDOW vs MAX_COMPLETION_TOKENS**：
+   - **CONTEXT_WINDOW**（上下文窗口）：模型的总容量限制（输入 tokens + 输出 tokens）
+     - 用于 KV Cache 优化和消息历史管理
+     - 示例：Kimi k2 的 CONTEXT_WINDOW=256000 表示输入+输出总共不能超过 256K tokens
+
+   - **MAX_COMPLETION_TOKENS**（最大完成 tokens）：单次输出的最大 token 数（仅控制输出）
+     - **关键用途**：防止工具调用被截断（tool call JSON 不完整导致解析失败）
+     - 默认值：2048（如未配置）
+     - **推荐值**：
+       - 基础/多模态模型：4096
+       - 推理/代码模型：8192（需要更长的输出）
+       - Kimi API 默认仅 1024，**强烈建议设置为 4096+**
+     - **向后兼容**：也支持旧名称 `MODEL_*_MAX_TOKENS`
 
 3. **Jina AI 配置**：
    - 用于 `fetch_web` 和 `web_search` 工具

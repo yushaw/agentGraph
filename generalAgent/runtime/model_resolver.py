@@ -75,40 +75,68 @@ def resolve_model_configs(settings: Settings) -> Dict[str, ModelConfig]:
             "api_key": settings.models.base_api_key,
             "base_url": settings.models.base_base_url,
             "context_window": settings.models.base_context_window,
+            "max_completion_tokens": settings.models.base_max_completion_tokens,
         },
         "reason": {
             "id": _resolved_value(settings.models.reason, "MODEL_REASONING_ID", "MODEL_REASON_ID", "MODEL_REASON") or "reasoner-pro",
             "api_key": settings.models.reason_api_key,
             "base_url": settings.models.reason_base_url,
             "context_window": settings.models.reason_context_window,
+            "max_completion_tokens": settings.models.reason_max_completion_tokens,
         },
         "vision": {
             "id": _resolved_value(settings.models.vision, "MODEL_MULTIMODAL_ID", "MODEL_VISION_ID", "MODEL_VISION") or "vision-omni",
             "api_key": settings.models.vision_api_key,
             "base_url": settings.models.vision_base_url,
             "context_window": settings.models.vision_context_window,
+            "max_completion_tokens": settings.models.vision_max_completion_tokens,
         },
         "code": {
             "id": _resolved_value(settings.models.code, "MODEL_CODE_ID", "MODEL_CODE") or "code-pro",
             "api_key": settings.models.code_api_key,
             "base_url": settings.models.code_base_url,
             "context_window": settings.models.code_context_window,
+            "max_completion_tokens": settings.models.code_max_completion_tokens,
         },
         "chat": {
             "id": _resolved_value(settings.models.chat, "MODEL_CHAT_ID", "MODEL_CHAT") or "chat-mid",
             "api_key": settings.models.chat_api_key,
             "base_url": settings.models.chat_base_url,
             "context_window": settings.models.chat_context_window,
+            "max_completion_tokens": settings.models.chat_max_completion_tokens,
         },
     }
 
 
-def _chat_kwargs(model: str, api_key: Optional[str], base_url: Optional[str]) -> Dict[str, object]:
+def _chat_kwargs(model: str, api_key: Optional[str], base_url: Optional[str], max_tokens: int = 2048) -> Dict[str, object]:
+    """Build ChatOpenAI kwargs with model-specific configuration.
+
+    Args:
+        model: Model ID
+        api_key: API key for authentication
+        base_url: Optional custom API endpoint
+        max_tokens: Maximum completion tokens (default: 2048, fallback value)
+
+    Returns:
+        Dict of kwargs for ChatOpenAI initialization
+
+    Note:
+        max_tokens controls output length to prevent tool call truncation.
+        Each model can have its own limit configured via .env (e.g., MODEL_CHAT_MAX_TOKENS).
+    """
     if not api_key:
         raise RuntimeError(f"缺少模型 {model} 的 API Key，请在 .env 中配置。")
-    kwargs: Dict[str, object] = {"model": model, "api_key": api_key, "temperature": 0.2}
+
+    kwargs: Dict[str, object] = {
+        "model": model,
+        "api_key": api_key,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,  # Prevent completion truncation
+    }
+
     if base_url:
         kwargs["base_url"] = base_url
+
     return kwargs
 
 
@@ -137,7 +165,9 @@ def build_model_resolver(model_configs: Dict[str, ModelConfig]) -> ModelResolver
     catalog: Dict[str, Callable[[], ChatOpenAI]] = {}
     for config in model_configs.values():
         model_id = config["id"]
-        catalog[model_id] = lambda cfg=config: ChatOpenAI(**_chat_kwargs(cfg["id"], cfg["api_key"], cfg["base_url"]))
+        catalog[model_id] = lambda cfg=config: ChatOpenAI(
+            **_chat_kwargs(cfg["id"], cfg["api_key"], cfg["base_url"], cfg["max_completion_tokens"])
+        )
 
     def resolver(model_id: str):
         if model_id not in catalog:

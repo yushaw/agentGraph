@@ -377,6 +377,23 @@ def build_planner_node(
         cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
         cumulative_completion_tokens = state.get("cumulative_completion_tokens", 0)
 
+        # Check for output truncation (finish_reason="length")
+        finish_reason = output.response_metadata.get("finish_reason")
+        if finish_reason == "length":
+            LOGGER.warning(
+                "⚠️ Model output truncated due to max_tokens limit (finish_reason='length'). "
+                "This may cause incomplete tool calls or responses."
+            )
+
+            # Check if tool calls were affected
+            if hasattr(output, "invalid_tool_calls") and output.invalid_tool_calls:
+                LOGGER.error(
+                    f"❌ {len(output.invalid_tool_calls)} invalid tool call(s) detected. "
+                    "Likely caused by JSON truncation. "
+                    "Consider: (1) Increase MODEL_*_MAX_TOKENS in .env, "
+                    "(2) Use edit_file instead of write_file for long content"
+                )
+
         if context_manager:
             token_usage = context_manager.tracker.extract_token_usage(output)
 
