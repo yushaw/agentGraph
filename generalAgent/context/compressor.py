@@ -14,96 +14,83 @@ from generalAgent.config.settings import ContextManagementSettings
 from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
 
 
-# Prompt templates for compression
-COMPACT_PROMPT = """Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.
-This summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.
+# Prompt templates for compression - Optimized for AgentGraph Agent Loop
+COMPACT_PROMPT = """你正在压缩一段 Agent 对话历史，以便在不丢失关键信息的前提下节省 token。
 
-Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points. In your analysis process:
+这是一个 **LangGraph Agent Loop 系统**，Agent 通过调用工具完成任务。请详细总结以下内容：
 
-1. Chronologically analyze each message and section of the conversation. For each section thoroughly identify:
-   - The user's explicit requests and intents
-   - Your approach to addressing the user's requests
-   - Key decisions, technical concepts and code patterns
-   - Specific details like:
-     - file names
-     - full code snippets
-     - function signatures
-     - file edits
+## 总结要求
 
-- Errors that you ran into and how you fixed them
-- Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
+### 1. 用户请求和意图
+- 用户明确提出的需求
+- 任务目标和期望结果
 
-2. Double-check for technical accuracy and completeness, addressing each required element thoroughly.
+### 2. 工具调用记录（核心重点）
+按时间顺序列出所有工具调用：
+- **工具名称**：如 read_file, write_file, search_file, run_bash_command 等
+- **关键参数**：文件路径、搜索关键词、命令等
+- **调用结果**：成功/失败，重要输出
+- **调用原因**：为什么调用这个工具
 
-Your summary should include the following sections:
+示例格式：
+```
+read_file("uploads/report.pdf") → 成功读取 PDF（15 页）
+  原因：用户要求分析报告内容
+  结果：发现 Q3 财务数据
 
-1. Primary Request and Intent: Capture all of the user's explicit requests and intents in detail
-2. Key Technical Concepts: List all important technical concepts, technologies, and frameworks discussed.
-3. Files and Code Sections: Enumerate specific files and code sections examined, modified, or created. Pay special attention to the most recent messages and include full code snippets where applicable and include a summary of why this file read or edit is important.
-4. Errors and fixes: List all errors that you ran into, and how you fixed them. Pay special attention to specific user feedback that you received, especially if the user told you to do something differently.
-5. Problem Solving: Document problems solved and any ongoing troubleshooting efforts.
-6. All user messages: List ALL user messages that are not tool results. These are critical for understanding the users' feedback and changing intent.
-7. Pending Tasks: Outline any pending tasks that you have explicitly been asked to work on.
-8. Current Work: Describe in detail precisely what was being worked on immediately before this summary request, paying special attention to the most recent messages from both user and assistant. Include file names and code snippets where applicable.
-9. Optional Next Step: List the next step that you will take that is related to the most recent work you were doing. IMPORTANT: ensure that this step is DIRECTLY in line with the user's explicit requests, and the task you were working on immediately before this summary request. If your last task was concluded, then only list next steps if they are explicitly in line with the users request. Do not start on tangential requests without confirming with the user first.
-   If there is a next step, include direct quotes from the most recent conversation showing exactly what task you were working on and where you left off. This should be verbatim to ensure there's no drift in task interpretation.
+search_file("uploads/data.xlsx", "revenue") → 找到 3 处匹配
+  原因：查找营收相关数据
+  结果：Sheet1 A15:A17
+```
 
-Please provide your summary based on the conversation so far, following this structure and ensuring precision and thoroughness in your response.
-Format your response as:
+### 3. 技能（Skill）使用
+- 加载了哪些 Skill（如 @pdf, @docx）
+- Skill 的使用场景和效果
 
-<analysis>
-[Your thought process, ensuring all points are covered thoroughly and accurately]
-</analysis>
+### 4. 文件操作记录
+- **读取的文件**：路径、文件类型、内容摘要
+- **写入的文件**：路径、内容用途
+- **工作空间结构**：uploads/, outputs/, skills/ 中的文件
+
+### 5. 错误和修复
+- 遇到的错误（工具调用失败、API 错误等）
+- 如何修复的
+- 用户反馈和调整
+
+### 6. TODO 任务状态
+- 已完成的任务
+- 进行中的任务
+- 待完成的任务
+
+### 7. 关键决策点
+- 为什么选择某个方法或工具
+- 放弃的方案和原因
+
+### 8. 当前状态
+- 最后一次操作
+- 下一步计划（如果有明确指示）
+
+## 输出格式
+
+使用清晰的分段结构，**保留文件路径、工具名称、关键参数**等技术细节。
 
 <summary>
-1. Primary Request and Intent:
-   [Detailed description]
-
-2. Key Technical Concepts:
-   - [Concept 1]
-   - [Concept 2]
-   - [...]
-
-3. Files and Code Sections:
-   - [File Name 1]
-     - [Summary of why this file is important]
-     - [Summary of the changes made to this file, if any]
-     - [Important Code Snippet]
-   - [File Name 2]
-     - [Important Code Snippet]
-   - [...]
-
-4. Errors and fixes:
-   - [Detailed description of error 1]:
-     - [How you fixed the error]
-     - [User feedback on the error if any]
-   - [...]
-
-5. Problem Solving:
-   [Description of solved problems and ongoing troubleshooting]
-
-6. All user messages:
-   - [Detailed non tool use user message]
-   - [...]
-
-7. Pending Tasks:
-   - [Task 1]
-   - [Task 2]
-   - [...]
-
-8. Current Work:
-   [Precise description of current work]
-
-9. Optional Next Step:
-   [Optional Next step to take]
+[用中文输出详细总结，确保包含所有工具调用、文件操作、错误修复等信息]
 </summary>"""
 
 
-SUMMARIZE_PROMPT = """You are a helpful AI assistant tasked with summarizing conversations.
+SUMMARIZE_PROMPT = """你正在极简压缩一段 Agent 对话历史（紧急情况下使用）。
 
-Summarize this coding conversation in under 290 characters. Capture the main task, key files, problems addressed, and current status.
+请用 **不超过 200 字** 总结：
+1. 核心任务是什么
+2. 使用了哪些关键工具（如 read_file, search_file 等）
+3. 处理了哪些文件（路径）
+4. 当前状态和主要成果
 
-Format: A single concise paragraph."""
+输出格式：一段简洁的中文描述，**必须包含文件路径和工具名称**。
+
+示例：
+用户要求分析 uploads/report.pdf，调用 read_file 读取内容后使用 search_file 查找关键词"revenue"，在 Sheet1 找到 Q3 数据。已完成数据提取，待生成分析报告到 outputs/analysis.md。"""
 
 
 class ContextCompressor:
