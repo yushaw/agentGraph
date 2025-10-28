@@ -10,6 +10,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 
 from generalAgent.agents import ModelResolver, invoke_planner
+from generalAgent.context.token_tracker import TokenTracker
 from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
 from generalAgent.graph.prompts import (
     PLANNER_SYSTEM_PROMPT,
@@ -77,6 +78,12 @@ def build_planner_node(
 
     persistent_global_tools = list(persistent_global_tools)
     max_message_history = settings.governance.max_message_history
+
+    # ========== Initialize Token Tracker ==========
+    token_tracker = TokenTracker(
+        context_settings=settings.context,
+        model_settings=settings.models,
+    )
 
     # ========== Build static system prompt (with fixed datetime) ==========
     # Generate datetime tag once at initialization (minute precision, never updates)
@@ -195,6 +202,46 @@ def build_planner_node(
         cleaned_history = clean_message_history(history)
         recent_history = truncate_messages_safely(cleaned_history, keep_recent=max_message_history)
 
+        # ========== Check token usage and build warning if needed ==========
+        cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
+        cumulative_completion_tokens = state.get("cumulative_completion_tokens", 0)
+        compact_count = state.get("compact_count", 0)
+        last_prompt_tokens = state.get("last_prompt_tokens", 0)
+
+        # Check context status (uses last known model from state, or defaults to base)
+        # We use cumulative tokens from previous calls to determine if warning is needed
+        token_warning_reminder = ""
+        should_load_compact_tool = False
+
+        if settings.context.enabled and cumulative_prompt_tokens > 0:
+            # Get model_pref or default to base model
+            preference = state.get("model_pref")
+            # Estimate which model will be used (same logic as invoke_planner)
+            model_id = settings.models.base  # Default
+            if preference == "reasoning":
+                model_id = settings.models.reason
+            elif has_images:
+                model_id = settings.models.vision
+            elif need_code:
+                model_id = settings.models.code
+            else:
+                model_id = settings.models.chat
+
+            status = token_tracker.check_status(
+                cumulative_prompt_tokens=cumulative_prompt_tokens,
+                cumulative_completion_tokens=cumulative_completion_tokens,
+                last_model_id=model_id,
+                compact_count=compact_count,
+            )
+
+            if status.needs_warning or status.needs_compression:
+                token_warning_reminder = token_tracker.format_warning_message(status)
+                should_load_compact_tool = True
+                LOGGER.warning(
+                    f"Token warning triggered - Usage: {status.usage_ratio:.1%} "
+                    f"({cumulative_prompt_tokens}/{status.context_window} tokens)"
+                )
+
         # Add todo reminder if there are todos
         todos = state.get("todos", [])
         todo_reminder = ""
@@ -263,12 +310,19 @@ def build_planner_node(
             if new_uploaded_files:
                 file_upload_reminder = build_file_upload_reminder(new_uploaded_files, skill_config)
 
-            # Collect all dynamic reminders
-            reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder] if r]
+            # Collect all dynamic reminders (including token warning)
+            reminders = [r for r in [dynamic_reminder, todo_reminder, file_upload_reminder, token_warning_reminder] if r]
             combined_reminders = "\n\n".join(reminders) if reminders else ""
 
             if combined_reminders:
                 LOGGER.info(f"  - Built {len(reminders)} reminder(s) to append to last message")
+
+            # Dynamically load compact_context tool if token warning triggered
+            if should_load_compact_tool:
+                compact_tool = tool_registry.get_tool("compact_context")
+                if compact_tool and compact_tool not in visible_tools:
+                    visible_tools.append(compact_tool)
+                    LOGGER.info("  - Dynamically loaded compact_context tool due to token warning")
 
         # Log prompt with truncation for readability
         log_prompt(LOGGER, "planner", base_prompt, max_length=500)
@@ -313,11 +367,49 @@ def build_planner_node(
 
         LOGGER.info("Planner invocation completed")
 
+        # ========== Extract and track token usage ==========
+        token_usage = token_tracker.extract_token_usage(output)
+        cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
+        cumulative_completion_tokens = state.get("cumulative_completion_tokens", 0)
+        compact_count = state.get("compact_count", 0)
+
+        if token_usage:
+            cumulative_prompt_tokens += token_usage.prompt_tokens
+            cumulative_completion_tokens += token_usage.completion_tokens
+            LOGGER.info(
+                f"Token usage - Prompt: {token_usage.prompt_tokens}, "
+                f"Completion: {token_usage.completion_tokens}, "
+                f"Total: {token_usage.total_tokens}, "
+                f"Cumulative Prompt: {cumulative_prompt_tokens}"
+            )
+
+            # Check if we need to warn about context window
+            status = token_tracker.check_status(
+                cumulative_prompt_tokens=cumulative_prompt_tokens,
+                cumulative_completion_tokens=cumulative_completion_tokens,
+                last_model_id=token_usage.model_name,
+                compact_count=compact_count,
+            )
+
+            if status.needs_warning or status.needs_compression:
+                LOGGER.warning(
+                    f"Context window usage: {status.usage_ratio:.1%} "
+                    f"({cumulative_prompt_tokens}/{status.context_window} tokens)"
+                )
+                if status.needs_compression:
+                    LOGGER.warning("Force compression threshold reached!")
+        else:
+            LOGGER.warning("Token usage metadata not available from model response")
+
         # Increment loop counter for Agent Loop tracking
         current_loops = state.get("loops", 0)
         updates = {
             "messages": [output],
             "loops": current_loops + 1,
+            # Update token tracking
+            "cumulative_prompt_tokens": cumulative_prompt_tokens,
+            "cumulative_completion_tokens": cumulative_completion_tokens,
+            "last_prompt_tokens": token_usage.prompt_tokens if token_usage else 0,
             # Clear one-time reminders (used in this turn, no longer needed)
             "new_uploaded_files": [],  # File upload reminder shown once
             "new_mentioned_agents": [],  # @mention reminder shown once

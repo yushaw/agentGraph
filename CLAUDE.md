@@ -2,6 +2,37 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## ⚠️ CRITICAL DEVELOPMENT RULES
+
+**MUST FOLLOW** these rules when working on this project:
+
+### 1. Configuration Management
+- ❌ **NEVER** write configuration to `.env` files
+- ✅ **ALWAYS** write configuration to `generalAgent/config/` YAML files
+- ✅ Examples: `tools.yaml`, `skills.yaml`, `hitl_rules.yaml`
+- ✅ Only API keys and sensitive credentials go in `.env` (for Pydantic settings loading)
+- ✅ All feature flags, thresholds, and behavior configs MUST be in `generalAgent/config/`
+
+### 2. Testing Requirements
+- ✅ **MANDATORY**: Write comprehensive test coverage for all new features
+- ✅ Test organization:
+  - `tests/smoke/` - Fast critical-path validation (<30s total)
+  - `tests/unit/` - Module-level tests (isolated, mocked)
+  - `tests/integration/` - Module interaction tests
+  - `tests/e2e/` - Complete business workflow tests
+- ✅ Run tests before committing: `uv run python tests/run_tests.py smoke`
+
+### 3. Development Environment
+- ✅ **ALWAYS** use `uv` for package management and execution
+- ✅ Run commands with: `uv run python <script>`
+- ✅ Install dependencies with: `uv sync`
+- ❌ **DO NOT** use `pip` or bare `python` commands in documentation
+
+### 4. Code Quality
+- ✅ Type hints required for all new code
+- ✅ Docstrings required for public APIs
+- ✅ Follow existing project structure and patterns
+
 ## Project Overview
 
 AgentGraph is a LangGraph-based agent framework with an **Agent Loop architecture** (Claude Code style). The system uses:
@@ -130,11 +161,10 @@ async def main():
 ```bash
 # Install dependencies (Python 3.12 required)
 uv sync
-# Or: pip install -e .
 
-# Copy environment template and configure API keys
-cp .env.example .env
-# Edit .env with your model API keys
+# Configure API keys (create .env file with credentials only)
+# See .env.example for required keys (MODEL_BASIC_API_KEY, etc.)
+# All other configuration goes in generalAgent/config/ YAML files
 ```
 
 ### Running the Application
@@ -727,7 +757,7 @@ tools:
 
 ## Model Configuration
 
-Models configured via `.env` with provider-specific aliases:
+**API Credentials** (`.env` file - credentials only):
 
 ```bash
 # DeepSeek models
@@ -749,6 +779,8 @@ MODEL_CHAT_API_KEY=xxx
 MODEL_CHAT_BASE_URL=https://api.moonshot.cn/v1
 MODEL_CHAT_ID=kimi-k2-0905-preview
 ```
+
+**⚠️ Note**: `.env` file is ONLY for API keys and sensitive credentials. All other configuration (feature flags, thresholds, behavior settings) MUST go in `generalAgent/config/` YAML files.
 
 The system also supports canonical names (MODEL_BASE_*, MODEL_REASON_*, MODEL_VISION_*, MODEL_CODE_*, MODEL_CHAT_*) which are aliased to the provider-specific names above.
 

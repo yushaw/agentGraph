@@ -4,6 +4,28 @@ An opinionated LangGraph-based architecture for building various types of agents
 
 **Current Implementation**: General-purpose agent with dynamic tool calling, skill loading, and multi-model routing.
 
+## ⚠️ Development Requirements
+
+**For Contributors and Developers**:
+
+1. **Use `uv` for all operations** - This project uses `uv` for package management
+   ```bash
+   uv sync              # Install dependencies
+   uv run python main.py  # Run the application
+   uv run pytest tests/  # Run tests
+   ```
+
+2. **Configuration Management**
+   - ❌ **DO NOT** write feature configs to `.env`
+   - ✅ **ALWAYS** write configs to `generalAgent/config/` YAML files
+   - ✅ `.env` is ONLY for API keys and sensitive credentials
+   - ✅ See `CLAUDE.md` for detailed configuration rules
+
+3. **Testing is Mandatory**
+   - Write smoke + unit + integration + e2e tests for all features
+   - Run smoke tests before commits: `uv run python tests/run_tests.py smoke`
+   - See `tests/` directory structure and `CLAUDE.md` for guidelines
+
 ## Features
 
 - **Model registry & routing** – register five core model classes (base, reasoning, vision, code, chat) and pick the right model per phase (`plan`, `decompose`, `delegate`, etc.).
@@ -34,18 +56,24 @@ generalAgent/
 
 ## Configuration
 
-All runtime configuration is sourced from `.env` via **Pydantic BaseSettings** with automatic environment variable loading.
+Configuration is split between two locations:
+
+1. **`.env` file** - API keys and sensitive credentials ONLY (loaded via Pydantic BaseSettings)
+2. **`generalAgent/config/` YAML files** - All feature flags, thresholds, and behavior settings
 
 ### Settings Structure
 
 ```python
 Settings (generalAgent/config/settings.py)
-├── ModelRoutingSettings     # Model IDs and API credentials
-├── GovernanceSettings       # Runtime controls (auto_approve, max_loops)
-└── ObservabilitySettings    # Tracing, logging, persistence
+├── ModelRoutingSettings     # Model IDs and API credentials (from .env)
+├── GovernanceSettings       # Runtime controls (from .env)
+├── ContextManagementSettings # Token tracking & compression (from .env)
+└── ObservabilitySettings    # Tracing, logging, persistence (from .env)
 ```
 
-### Key Environment Variables
+**⚠️ Important**: Only credentials go in `.env`. Feature configs go in YAML files under `generalAgent/config/`.
+
+### API Credentials (.env file)
 
 **Model Configuration**:
 ```bash

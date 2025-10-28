@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (2025-10-28) - Context Management & Token Tracking ⭐
+
+**Major Feature**: Intelligent context compression to prevent hitting token limits during long conversations.
+
+**Core Components:**
+
+1. **TokenTracker** (`generalAgent/context/token_tracker.py`)
+   - Extract token usage from API responses (no estimation needed)
+   - Track cumulative prompt/completion tokens per session
+   - Dynamic context window detection per model (128k~256k)
+   - Configurable warning (80%) and force (95%) thresholds
+
+2. **ContextCompressor** (`generalAgent/context/compressor.py`)
+   - Layered compression: Keep Recent (10) + Compact Middle (30) + Summarize Old
+   - Preserves AIMessage-ToolMessage pairs during partitioning
+   - Two strategies: `compact` (detailed) and `summarize` (extreme)
+   - Compression cycle: 4× compact → 1× summarize (configurable)
+
+3. **compact_context Tool** (`generalAgent/tools/builtin/compact_context.py`)
+   - Agent-invoked compression when warned
+   - Returns compression stats (before/after message count, savings)
+   - Resets token counters after compression
+
+4. **Planner Integration** (`generalAgent/graph/nodes/planner.py`)
+   - Token tracking after each LLM call
+   - System reminder injection at threshold (KV Cache compatible)
+   - Dynamic tool loading when warning triggered
+
+**Configuration**: New `ContextManagementSettings` in `generalAgent/config/settings.py` with defaults:
+- `warning_threshold: 0.8` (80%), `force_compact_threshold: 0.95` (95%)
+- `keep_recent_messages: 10`, `compact_middle_messages: 30`, `summarize_cycle: 4`
+- All configurable via class defaults (no .env required)
+
+**Test Coverage**: 70 tests across smoke/unit/integration
+- `tests/smoke/test_context_management_smoke.py` (9 tests)
+- `tests/unit/test_token_tracker.py` (31 tests)
+- `tests/unit/test_context_compressor.py` (20 tests)
+- `tests/integration/test_context_management_integration.py` (10 tests)
+
+**Files Changed:**
+- New: `generalAgent/context/` (token_tracker.py, compressor.py, __init__.py)
+- New: `generalAgent/tools/builtin/compact_context.py`
+- New: 4 test files (70 tests total)
+- Modified: `state.py` (+5 fields), `settings.py` (+60 lines), `planner.py` (+60 lines), `tools.yaml`
+
+---
+
+### Changed (2025-10-28) - Development Guidelines
+
+**Added critical development rules** to `CLAUDE.md` and `README.md`:
+- Configuration: `.env` for credentials ONLY, `generalAgent/config/` YAML for all feature configs
+- Testing: Mandatory smoke + unit + integration + e2e coverage
+- Environment: Always use `uv` (not `pip` or bare `python`)
+
+**Files Updated:**
+- `CLAUDE.md` - Added "⚠️ CRITICAL DEVELOPMENT RULES" section
+- `README.md` - Added "⚠️ Development Requirements" section
+
 ### Changed (2025-10-27) - Documentation Reorganization ⭐
 
 **Major Enhancement**: Reorganized documentation from 14 scattered files into 6 core documents with improved structure and maintainability.

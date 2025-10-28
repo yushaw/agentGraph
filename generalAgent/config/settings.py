@@ -150,6 +150,64 @@ class GovernanceSettings(BaseSettings):
     )
 
 
+class ContextManagementSettings(BaseSettings):
+    """Context compression and token management settings.
+
+    Controls automatic context compression to prevent hitting token limits:
+    - enabled: Enable/disable automatic context management (default: True)
+    - warning_threshold: Trigger warning at X% of context window (default: 0.8 = 80%)
+    - force_compact_threshold: Force compression at X% (default: 0.95 = 95%)
+    - keep_recent_messages: Number of recent messages to keep uncompressed (default: 10)
+    - compact_middle_messages: Number of middle messages to compact (detailed) (default: 30)
+    - summarize_cycle: Trigger summarize every N compacts (default: 4)
+    """
+
+    enabled: bool = Field(default=True, alias="CONTEXT_MANAGEMENT_ENABLED")
+
+    # Thresholds (as fraction of context window)
+    warning_threshold: float = Field(
+        default=0.8,
+        ge=0.5,
+        le=0.95,
+        alias="CONTEXT_WARNING_THRESHOLD"
+    )
+    force_compact_threshold: float = Field(
+        default=0.95,
+        ge=0.8,
+        le=1.0,
+        alias="CONTEXT_FORCE_COMPACT_THRESHOLD"
+    )
+
+    # Message partitioning strategy (hybrid: count-based with token monitoring)
+    keep_recent_messages: int = Field(
+        default=10,
+        ge=5,
+        le=30,
+        alias="CONTEXT_KEEP_RECENT"
+    )
+    compact_middle_messages: int = Field(
+        default=30,
+        ge=10,
+        le=100,
+        alias="CONTEXT_COMPACT_MIDDLE"
+    )
+
+    # Compression strategy
+    summarize_cycle: int = Field(
+        default=4,
+        ge=2,
+        le=10,
+        alias="CONTEXT_SUMMARIZE_CYCLE",
+        description="Trigger summarize (extreme compression) every N compacts"
+    )
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
 class ObservabilitySettings(BaseSettings):
     """Tracing, logging, and persistence configuration.
 
@@ -246,9 +304,10 @@ class DocumentSettings(BaseModel):
 class Settings(BaseSettings):
     """Root application settings loaded from .env file.
 
-    Hierarchical structure containing four nested settings groups:
+    Hierarchical structure containing five nested settings groups:
     - models: Model routing and API credentials (ModelRoutingSettings)
     - governance: Agent behavior controls (GovernanceSettings)
+    - context: Context compression and token management (ContextManagementSettings)
     - observability: Tracing and logging (ObservabilitySettings)
     - documents: Document processing settings (DocumentSettings)
 
@@ -259,6 +318,7 @@ class Settings(BaseSettings):
     environment: str = Field(default="dev", alias="APP_ENV")
     models: ModelRoutingSettings = Field(default_factory=ModelRoutingSettings)
     governance: GovernanceSettings = Field(default_factory=GovernanceSettings)
+    context: ContextManagementSettings = Field(default_factory=ContextManagementSettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     documents: DocumentSettings = Field(default_factory=DocumentSettings)
 
