@@ -50,9 +50,7 @@ class ContextManager:
         self,
         response: AIMessage,
         cumulative_prompt_tokens: int,
-        model_id: str,
-        compact_count: int = 0,
-        last_compression_ratio: Optional[float] = None
+        model_id: str
     ) -> ContextManagementReport:
         """
         提取 token 使用并检查状态
@@ -61,8 +59,6 @@ class ContextManager:
             response: LLM 响应
             cumulative_prompt_tokens: 当前累积 prompt tokens
             model_id: 模型 ID
-            compact_count: 已压缩次数
-            last_compression_ratio: 上次压缩率
 
         Returns:
             包含状态和建议的报告
@@ -82,9 +78,7 @@ class ContextManager:
         # 3. 检查状态
         status = self.tracker.check_status(
             cumulative_prompt_tokens=new_cumulative,
-            model_id=model_id,
-            compact_count=compact_count,
-            last_compression_ratio=last_compression_ratio
+            model_id=model_id
         )
 
         # 4. 日志记录
@@ -116,20 +110,16 @@ class ContextManager:
     async def compress_context(
         self,
         messages: List[BaseMessage],
-        strategy: Literal["auto", "compact", "summarize"],
         model_invoker: Callable,
-        compact_count: int = 0,
-        last_compression_ratio: Optional[float] = None
+        context_window: int = 128000
     ) -> CompressionResult:
         """
         执行上下文压缩（带降级策略）
 
         Args:
             messages: 当前消息历史
-            strategy: 压缩策略
-            model_invoker: LLM 调用函数
-            compact_count: 已压缩次数
-            last_compression_ratio: 上次压缩率
+            model_invoker: LLM 调用函数（接受 prompt 和 max_tokens）
+            context_window: 模型的 context window 大小
 
         Returns:
             压缩结果
@@ -138,10 +128,8 @@ class ContextManager:
             # 尝试智能压缩
             result = await self.compressor.compress_messages(
                 messages=messages,
-                strategy=strategy,
                 model_invoker=model_invoker,
-                compact_count=compact_count,
-                last_compression_ratio=last_compression_ratio
+                context_window=context_window
             )
 
             return result

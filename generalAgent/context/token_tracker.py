@@ -38,7 +38,6 @@ class ContextStatus:
 
     # 压缩建议
     needs_compression: bool
-    compression_strategy: Optional[Literal["compact", "summarize"]]
 
     # 用户提示消息
     message: Optional[str]
@@ -140,9 +139,7 @@ class TokenTracker:
     def check_status(
         self,
         cumulative_prompt_tokens: int,
-        model_id: str,
-        compact_count: int = 0,
-        last_compression_ratio: Optional[float] = None
+        model_id: str
     ) -> ContextStatus:
         """
         检查当前上下文状态并给出响应建议
@@ -160,29 +157,25 @@ class TokenTracker:
         if usage_ratio < self.context_settings.info_threshold:
             level = "normal"
             needs_compression = False
-            strategy = None
             message = None
 
         elif usage_ratio < self.context_settings.warning_threshold:
             level = "info"
             needs_compression = False
-            strategy = self._decide_strategy(compact_count, last_compression_ratio)
             message = self._format_info_message(
-                cumulative_prompt_tokens, context_window, usage_ratio, strategy
+                cumulative_prompt_tokens, context_window, usage_ratio
             )
 
         elif usage_ratio < self.context_settings.critical_threshold:
             level = "warning"
             needs_compression = False
-            strategy = self._decide_strategy(compact_count, last_compression_ratio)
             message = self._format_warning_message(
-                cumulative_prompt_tokens, context_window, usage_ratio, strategy
+                cumulative_prompt_tokens, context_window, usage_ratio
             )
 
         else:  # >= 95%
             level = "critical"
             needs_compression = True
-            strategy = "summarize"  # 强制使用最激进策略
             message = self._format_critical_message(
                 cumulative_prompt_tokens, context_window, usage_ratio
             )
@@ -193,42 +186,11 @@ class TokenTracker:
             usage_ratio=usage_ratio,
             level=level,
             needs_compression=needs_compression,
-            compression_strategy=strategy,
             message=message
         )
 
-    def _decide_strategy(
-        self,
-        compact_count: int,
-        last_compression_ratio: Optional[float]
-    ) -> Literal["compact", "summarize"]:
-        """
-        动态决定压缩策略
 
-        规则：
-        1. 上次压缩率 > 40% (压缩效果不好) → summarize
-        2. 连续 compact 次数 ≥ 3 → summarize (防止过度压缩)
-        3. 否则 → compact (默认)
-        """
-        # 规则 1: 上次压缩效果不好
-        if last_compression_ratio and last_compression_ratio > self.context_settings.compression_ratio_threshold:
-            logger.info(
-                f"Last compression ratio {last_compression_ratio:.1%} exceeds threshold, "
-                f"switching to summarize"
-            )
-            return "summarize"
-
-        # 规则 2: 连续 compact 次数限制
-        if compact_count > 0 and compact_count % self.context_settings.compact_cycle_limit == 0:
-            logger.info(
-                f"Compact count reached {compact_count}, cycling to summarize"
-            )
-            return "summarize"
-
-        # 规则 3: 默认 compact
-        return "compact"
-
-    def _format_info_message(self, current: int, total: int, ratio: float, strategy: str) -> str:
+    def _format_info_message(self, current: int, total: int, ratio: float) -> str:
         """75-85%: 温和提示"""
         return f"""<system_reminder>
 💡 Token 使用提示
@@ -236,10 +198,9 @@ class TokenTracker:
 当前累积: {current:,} / {total:,} tokens ({ratio:.1%})
 
 如果对话还将继续，可以考虑使用 compact_context 工具压缩上下文。
-建议策略: {strategy}
 </system_reminder>"""
 
-    def _format_warning_message(self, current: int, total: int, ratio: float, strategy: str) -> str:
+    def _format_warning_message(self, current: int, total: int, ratio: float) -> str:
         """85-95%: 强烈警告"""
         return f"""<system_reminder>
 ⚠️ Token 使用警告
@@ -248,8 +209,6 @@ class TokenTracker:
 
 ⚠️ 强烈建议立即使用 compact_context 工具压缩上下文！
 如果不压缩，对话可能很快中断。
-
-建议策略: {strategy}
 </system_reminder>"""
 
     def _format_critical_message(self, current: int, total: int, ratio: float) -> str:

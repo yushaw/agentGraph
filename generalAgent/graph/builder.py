@@ -11,9 +11,11 @@ from generalAgent.graph.nodes import (
     build_finalize_node,
     build_planner_node,
 )
+from generalAgent.graph.nodes.summarization import build_summarization_node
 from generalAgent.graph.routing import (
     agent_route,
     tools_route,
+    summarization_route,
 )
 from generalAgent.graph.state import AppState
 from generalAgent.hitl import ApprovalToolNode
@@ -35,23 +37,24 @@ def build_state_graph(
 ):
     """Compose the agent graph with Agent Loop architecture (Claude Code style).
 
-    Simplified Architecture:
+    Architecture with Auto-Compression:
 
         START → agent ⇄ tools → agent ⇄ ... → finalize → END
-                  ↑_____________↓
+                  ↑      ↓
+                  ↑ summarization (auto-compress when >95% tokens)
+                  ↑______↓
 
     Agent Loop design (no Plan-and-Execute):
     - Single agent node that decides its own flow
     - LLM chooses to call tools or finish
     - TodoWrite tool for progress tracking (observer, not commander)
-    - No complexity analysis, no multi-phase execution
+    - Automatic compression when token usage >95% (via routing)
     - Agent operates continuously until task complete or loop limit
 
-    Key changes from Plan-and-Execute:
-    - Removed: post, analyze, step_executor nodes
-    - Removed: plan/step_idx/step_calls state fields
+    Key features:
     - Simplified routing: agent decides everything via tool_calls
-    - Agent can use TodoWrite to track progress dynamically
+    - Automatic context compression via dedicated summarization node
+    - Compression triggers before agent response, ensuring continuity
     """
 
     # ========== Build nodes ==========
@@ -71,11 +74,16 @@ def build_state_graph(
         settings=settings,
     )
 
+    summarization_node = build_summarization_node(
+        settings=settings,
+    )
+
     # ========== Build graph ==========
     graph = StateGraph(AppState)
 
     # Add nodes
     graph.add_node("agent", agent_node)
+    graph.add_node("summarization", summarization_node)
 
     # Tools node with optional approval
     # IMPORTANT: Use ALL discovered tools (not just enabled ones) for ToolNode
@@ -97,17 +105,27 @@ def build_state_graph(
     graph.add_node("tools", tools_node)
     graph.add_node("finalize", finalize_node)
 
-    # ========== Agent Loop ==========
+    # ========== Agent Loop with Auto-Compression ==========
     # Entry point
     graph.add_edge(START, "agent")
 
-    # Agent decides: call tools or finish
+    # Agent decides: compress, call tools, or finish
     graph.add_conditional_edges(
         "agent",
         agent_route,
         {
-            "tools": "tools",      # LLM wants to call tools
-            "finalize": "finalize",  # LLM decided to finish
+            "summarization": "summarization",  # Token usage >95%, compress first
+            "tools": "tools",                  # LLM wants to call tools
+            "finalize": "finalize",            # LLM decided to finish
+        }
+    )
+
+    # Summarization always returns to agent (to continue with original request)
+    graph.add_conditional_edges(
+        "summarization",
+        summarization_route,
+        {
+            "agent": "agent",  # Return to agent after compression
         }
     )
 

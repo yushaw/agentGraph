@@ -5,9 +5,11 @@ compact_context 工具
 """
 
 from typing import Annotated, Literal, Optional
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolCallId
+from langchain_core.messages import RemoveMessage, ToolMessage
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from generalAgent.graph.state import AppState
 from generalAgent.config.settings import get_settings
@@ -17,20 +19,29 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-async def _invoke_model_for_compression(prompt: str) -> str:
+async def _invoke_model_for_compression(prompt: str, max_tokens: int = 1440) -> str:
     """
     为压缩调用 LLM 的辅助函数
 
     Args:
         prompt: 压缩 prompt（包含历史消息）
+        max_tokens: 最大输出 token 数
 
     Returns:
         LLM 返回的摘要文本
     """
-    from generalAgent.models.registry import get_model
+    from langchain_openai import ChatOpenAI
 
     settings = get_settings()
-    model = get_model("base")  # 使用基础模型进行压缩
+
+    # 使用基础模型配置创建临时 LLM 实例
+    model = ChatOpenAI(
+        model=settings.models.base,
+        api_key=settings.models.base_api_key,
+        base_url=settings.models.base_base_url,
+        max_tokens=max_tokens,
+        temperature=0.3
+    )
 
     # 调用 LLM
     response = await model.ainvoke(prompt)
@@ -41,6 +52,7 @@ async def _invoke_model_for_compression(prompt: str) -> str:
 @tool
 async def compact_context(
     state: Annotated[AppState, InjectedState],
+    tool_call_id: Annotated[str, InjectedToolCallId],
     strategy: Literal["auto", "compact", "summarize"] = "auto"
 ) -> Command:
     """压缩会话上下文以释放 token 空间
@@ -70,10 +82,10 @@ async def compact_context(
     if not settings.context.enabled:
         return Command(
             update={
-                "messages": [{
-                    "role": "tool",
-                    "content": "⚠️ 上下文管理功能未启用。请在配置中启用 CONTEXT_MANAGEMENT_ENABLED=true"
-                }]
+                "messages": [ToolMessage(
+                    content="⚠️ 上下文管理功能未启用。请在配置中启用 CONTEXT_MANAGEMENT_ENABLED=true",
+                    tool_call_id=tool_call_id
+                )]
             }
         )
 
@@ -91,10 +103,10 @@ async def compact_context(
     if len(messages) < 15:
         return Command(
             update={
-                "messages": [{
-                    "role": "tool",
-                    "content": "💡 当前消息数量较少（< 15 条），暂不需要压缩。"
-                }]
+                "messages": [ToolMessage(
+                    content="💡 当前消息数量较少（< 15 条），暂不需要压缩。",
+                    tool_call_id=tool_call_id
+                )]
             }
         )
 
@@ -102,12 +114,15 @@ async def compact_context(
     try:
         context_manager = ContextManager(settings)
 
+        # Get context window from token tracker
+        from generalAgent.context.token_tracker import TokenTracker
+        tracker = TokenTracker(settings)
+        context_window = tracker.get_context_window(settings.models.base)
+
         result = await context_manager.compress_context(
             messages=messages,
-            strategy=strategy,
             model_invoker=_invoke_model_for_compression,
-            compact_count=compact_count,
-            last_compression_ratio=last_compression_ratio
+            context_window=context_window
         )
 
         # 生成用户可见报告
@@ -118,10 +133,11 @@ async def compact_context(
             f"ratio={result.compression_ratio:.1%}, strategy={result.strategy}"
         )
 
+        # ✅ Use official LangGraph API: RemoveMessage(id=REMOVE_ALL_MESSAGES)
         # 更新 state
         return Command(
             update={
-                "messages": result.messages,  # 替换整个消息历史
+                "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)] + result.messages,  # Clear all, then add compressed
                 "compact_count": compact_count + 1,
                 "last_compact_strategy": result.strategy,
                 "last_compression_ratio": result.compression_ratio,
@@ -137,10 +153,10 @@ async def compact_context(
 
         return Command(
             update={
-                "messages": [{
-                    "role": "tool",
-                    "content": f"❌ 上下文压缩失败: {str(e)}\n\n系统已尝试降级策略，但仍然失败。请联系管理员检查日志。"
-                }]
+                "messages": [ToolMessage(
+                    content=f"❌ 上下文压缩失败: {str(e)}\n\n系统已尝试降级策略，但仍然失败。请联系管理员检查日志。",
+                    tool_call_id=tool_call_id
+                )]
             }
         )
 

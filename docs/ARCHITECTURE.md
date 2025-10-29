@@ -157,21 +157,29 @@ class AppState(TypedDict):
 
 ### 1.3 节点系统
 
-**设计**: 三个核心节点构成完整执行流程。
+**设计**: 四个核心节点构成完整执行流程（含自动上下文压缩）。
 
 **节点定义**:
 
 **1. agent 节点** (planner.py)
-   - **职责**: 分析任务，决定调用工具或结束
+   - **职责**: 分析任务，决定调用工具或结束；检测 token 使用率
    - **输入**: 用户消息 + 工具结果
-   - **输出**: tool_calls 或结束信号
+   - **输出**: tool_calls、结束信号、或压缩标志 (`needs_compression`)
+   - **Token 检测**: 调用 LLM 前检查 token 使用率，>95% 时设置 `needs_compression=True` 并立即返回
 
-**2. tools 节点** (LangGraph ToolNode)
+**2. summarization 节点** ⭐ NEW (summarization.py)
+   - **职责**: 自动压缩对话历史（当 token 使用 >95%）
+   - **输入**: 完整会话历史
+   - **输出**: 压缩后的消息 + 重置 token 计数器
+   - **策略**: LLM 智能压缩（保留关键信息）→ 降级为紧急截断
+   - **触发方式**: 通过 routing 自动触发，压缩后返回 agent 继续执行
+
+**3. tools 节点** (LangGraph ToolNode)
    - **职责**: 执行工具调用
    - **输入**: tool_calls
    - **输出**: ToolMessage
 
-**3. finalize 节点**
+**4. finalize 节点**
    - **职责**: 生成最终响应
    - **输入**: 完整会话历史
    - **输出**: 最终 AIMessage
@@ -179,11 +187,13 @@ class AppState(TypedDict):
 **实现位置**:
 
 ```python
-# generalAgent/graph/builder.py:56-69
+# generalAgent/graph/builder.py:60-86
 agent_node = build_planner_node(...)
+summarization_node = build_summarization_node(settings=settings)
 finalize_node = build_finalize_node(...)
 
 graph.add_node("agent", agent_node)
+graph.add_node("summarization", summarization_node)  # 自动压缩节点
 graph.add_node("tools", ToolNode(tool_registry.list_tools()))
 graph.add_node("finalize", finalize_node)
 ```
@@ -192,40 +202,185 @@ graph.add_node("finalize", finalize_node)
 
 ### 1.4 路由系统
 
-**设计**: 条件边控制节点间的转换。
+**设计**: 条件边控制节点间的转换，支持自动压缩流程。
 
 **路由函数**:
 
-**1. agent_route** (generalAgent/graph/routing.py:6-20)
+**1. agent_route** (generalAgent/graph/routing.py:14-62)
 
 ```python
-def agent_route(state: AppState) -> Literal["tools", "finalize"]:
-    messages = state["messages"]
-    last = messages[-1]
+def agent_route(state: AppState) -> Literal["tools", "summarization", "finalize"]:
+    loops = state.get("loops", 0)
+    max_loops = state.get("max_loops", 42)
 
     # 检查循环限制
-    if state["loops"] >= state["max_loops"]:
+    if loops >= max_loops:
         return "finalize"
 
-    # LLM 想要调用工具
-    if last.tool_calls:
-        return "tools"
+    # 检查是否需要压缩（planner 设置的标志）
+    needs_compression = state.get("needs_compression", False)
+    auto_compressed = state.get("auto_compressed_this_request", False)
 
-    # LLM 完成
+    if needs_compression and not auto_compressed:
+        return "summarization"  # Token 使用 >95%，触发压缩
+
+    # 检查工具调用
+    messages = state.get("messages", [])
+    if messages:
+        last_message = messages[-1]
+        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+            return "tools"
+
     return "finalize"
 ```
 
-**2. tools_route** (generalAgent/graph/routing.py:23-26)
+**2. tools_route** (generalAgent/graph/routing.py:65-76)
 
 ```python
 def tools_route(state: AppState) -> Literal["agent"]:
     return "agent"  # 总是返回到 agent
 ```
 
+**3. summarization_route** ⭐ NEW (generalAgent/graph/routing.py:79-90)
+
+```python
+def summarization_route(state: AppState) -> Literal["agent"]:
+    return "agent"  # 压缩完成后返回 agent 继续处理原始请求
+```
+
+**执行流程**:
+
+```
+用户消息 → agent (检测 96% token 使用)
+             ↓
+          设置 needs_compression=True
+             ↓
+          routing 检查标志
+             ↓
+        summarization (压缩 302 → 13 条消息)
+             ↓
+          routing 返回 agent
+             ↓
+          agent (用压缩后的上下文继续执行)
+             ↓
+          tools / finalize
+```
+
 **设计考量**:
-- 简单的条件逻辑，避免复杂性
-- 强制循环限制防止无限循环
+- 优先检查压缩需求，避免 token 溢出
+- 压缩后自动返回 agent，用户无感知
+- 循环限制防止无限循环
 - Tools 节点总是返回到 agent（闭环）
+
+---
+
+### 1.5 上下文管理与自动压缩 ⭐ NEW
+
+**设计目标**: 自动管理对话历史长度，防止 token 溢出，同时保持对话连贯性。
+
+#### 1.5.1 核心机制
+
+**Token 监控** (generalAgent/context/token_tracker.py)
+- 在每次调用 LLM 前检查累积 token 使用
+- 根据使用率分为 4 个级别：
+  - **normal** (< 75%): 正常状态
+  - **info** (75-85%): 显示提示，加载 `compact_context` 工具
+  - **warning** (85-95%): 显示警告，建议压缩
+  - **critical** (≥ 95%): 触发自动压缩
+
+**自动压缩流程**:
+
+```
+1. Planner 检测 token 使用 > 95%
+   ↓
+2. 设置 needs_compression=True，跳过 LLM 调用
+   ↓
+3. Routing 检查标志，路由到 summarization 节点
+   ↓
+4. Summarization 执行压缩
+   - 保留最近 10 条消息（可配置）
+   - 压缩旧消息为摘要（LLM生成）
+   - 重置 token 计数器
+   ↓
+5. 返回 agent 节点，用压缩后的上下文继续执行
+```
+
+#### 1.5.2 压缩策略
+
+**分层保留**:
+- **System**: 保留所有 SystemMessage
+- **Recent**: 保留最近 N 条消息（完整）
+- **Old**: 剩余消息压缩为摘要
+
+**配置参数** (generalAgent/config/settings.py:240-271):
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `enabled` | `True` | 是否启用上下文管理 |
+| `info_threshold` | `0.75` | 75% 显示提示 |
+| `warning_threshold` | `0.85` | 85% 显示警告 |
+| `critical_threshold` | `0.95` | 95% 触发自动压缩 |
+| `keep_recent_messages` | `10` | 保留最近 N 条消息 |
+| `keep_recent_ratio` | `0.15` | 保留最近 15% context window |
+| `min_messages_to_compress` | `15` | 最少 15 条才触发压缩 |
+| `max_history_messages` | `100` | 紧急截断保留 100 条 |
+
+**环境变量配置**:
+```bash
+# .env 文件
+CONTEXT_CRITICAL_THRESHOLD=0.95  # 调整触发阈值
+CONTEXT_KEEP_RECENT_MESSAGES=10  # 保留最近消息数
+CONTEXT_MIN_MESSAGES_TO_COMPRESS=15  # 最小消息数
+```
+
+#### 1.5.3 实现细节
+
+**关键文件**:
+- `generalAgent/graph/nodes/summarization.py` - 压缩节点
+- `generalAgent/context/manager.py` - 上下文管理器
+- `generalAgent/context/compressor.py` - 压缩引擎
+- `generalAgent/context/token_tracker.py` - Token 监控
+- `generalAgent/config/settings.py` - 配置定义
+
+**孤儿 ToolMessage 处理**:
+
+压缩时会自动清理孤儿 ToolMessage（没有对应 tool_call 的 ToolMessage）：
+
+```python
+# compressor.py:290-327
+def _clean_orphan_tool_messages(messages):
+    # 收集有效的 tool_call_id
+    valid_ids = {tc['id'] for msg in messages
+                 if isinstance(msg, AIMessage) and msg.tool_calls
+                 for tc in msg.tool_calls}
+
+    # 过滤孤儿 ToolMessage
+    return [msg for msg in messages
+            if not isinstance(msg, ToolMessage)
+            or msg.tool_call_id in valid_ids]
+```
+
+**降级策略**:
+1. LLM 智能压缩（默认）
+2. 失败 → 紧急截断（保留最近 100 条）
+
+#### 1.5.4 用户体验
+
+**静默压缩**: 压缩过程对用户完全透明，无通知消息
+
+**示例日志**:
+```
+INFO - Token usage: 96.1% (123,000 / 128,000)
+INFO - Routing to summarization node
+INFO - Compressing 291 messages in single LLM call
+INFO - Compression successful: 302 → 13 messages (5.1%)
+INFO - Returning to agent with compressed context
+```
+
+**效果**:
+- 压缩前: 302 条消息, 123K tokens
+- 压缩后: 13 条消息, 6.5K tokens
+- 压缩率: 95% token 减少
 
 ---
 

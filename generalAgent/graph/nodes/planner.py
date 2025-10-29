@@ -6,10 +6,13 @@ import logging
 from datetime import datetime, timezone
 from typing import Iterable, List
 
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, RemoveMessage
 from langchain_core.tools import BaseTool
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from generalAgent.agents import ModelResolver, invoke_planner
+from generalAgent.context.manager import ContextManager
+from generalAgent.context.token_tracker import TokenTracker
 from generalAgent.graph.message_utils import clean_message_history, truncate_messages_safely
 from generalAgent.graph.prompts import (
     PLANNER_SYSTEM_PROMPT,
@@ -95,6 +98,9 @@ def build_planner_node(
     @with_error_boundary("planner")
     async def planner_node(state: AppState) -> AppState:
         log_node_entry(LOGGER, "planner", state)
+
+        # Reset auto-compression flag at start of each request
+        state["auto_compressed_this_request"] = False
 
         # ========== Context Management: Initialize ==========
         context_manager = ContextManager(settings) if settings.context.enabled else None
@@ -272,25 +278,28 @@ def build_planner_node(
 
             # ========== Context Management: Check token usage and add warning ==========
             token_warning = ""
+            LOGGER.info(f"  - Context manager enabled: {context_manager is not None}")
             if context_manager:
                 cumulative_prompt_tokens = state.get("cumulative_prompt_tokens", 0)
                 compact_count = state.get("compact_count", 0)
                 last_compression_ratio = state.get("last_compression_ratio")
 
+                LOGGER.info(f"  - Checking token status: cumulative={cumulative_prompt_tokens}, compact_count={compact_count}")
+
                 # Get model ID for context window lookup
                 model_id = settings.models.base  # Use base model ID
 
                 # Check status
-                from generalAgent.context.token_tracker import TokenTracker
                 tracker = TokenTracker(settings)
                 status = tracker.check_status(
                     cumulative_prompt_tokens=cumulative_prompt_tokens,
-                    model_id=model_id,
-                    compact_count=compact_count,
-                    last_compression_ratio=last_compression_ratio
+                    model_id=model_id
                 )
 
+                LOGGER.info(f"  - Token status: level={status.level}, usage={status.usage_ratio:.1%}")
+
                 # Add warning if needed and load compact_context tool
+                # Note: Critical (>95%) is now handled by routing to summarization node
                 if status.level in ["info", "warning"]:
                     token_warning = status.message
 
@@ -305,21 +314,16 @@ def build_planner_node(
                         LOGGER.error(f"compact_context tool not found in discovered tools: {e}")
                         LOGGER.error(f"  - Available discovered tools: {list(tool_registry._discovered.keys())[:10]}...")
 
-                # If critical (>95%), log warning but don't force compress yet (let agent decide)
+                # If critical (>95%), skip LLM call and trigger compression via routing
                 elif status.level == "critical":
-                    LOGGER.warning(f"  - Token usage CRITICAL: {status.usage_ratio:.1%}, agent should compress ASAP")
-                    token_warning = status.message
+                    LOGGER.warning(f"  - Token usage CRITICAL: {status.usage_ratio:.1%}")
+                    LOGGER.info("  - Skipping LLM call, will route to summarization")
 
-                    # Load tool (on-demand loading)
-                    try:
-                        LOGGER.info(f"  - Attempting to load compact_context (is_discovered: {tool_registry.is_discovered('compact_context')})")
-                        compact_tool = tool_registry.load_on_demand("compact_context")
-                        if compact_tool and compact_tool not in visible_tools:
-                            visible_tools.append(compact_tool)
-                            LOGGER.info(f"  - Successfully loaded compact_context tool")
-                    except KeyError as e:
-                        LOGGER.error(f"compact_context tool not found in discovered tools: {e}")
-                        LOGGER.error(f"  - Available discovered tools: {list(tool_registry._discovered.keys())[:10]}...")
+                    # Return immediately with flag for routing
+                    return {
+                        "needs_compression": True,  # Flag for routing
+                        "loops": state.get("loops", 0) + 1,
+                    }
 
             # Add token warning to reminders
             if token_warning:
@@ -398,12 +402,14 @@ def build_planner_node(
             token_usage = context_manager.tracker.extract_token_usage(output)
 
             if token_usage:
-                cumulative_prompt_tokens += token_usage.prompt_tokens
+                # Use prompt_tokens directly (not累加) - it represents current context size
+                # API returns prompt_tokens = total tokens sent (system + history + current input)
+                cumulative_prompt_tokens = token_usage.prompt_tokens
                 cumulative_completion_tokens += token_usage.completion_tokens
 
                 LOGGER.info(
                     f"  - Token usage: Prompt {token_usage.prompt_tokens:,} "
-                    f"(cumulative: {cumulative_prompt_tokens:,}), "
+                    f"(current context size), "
                     f"Completion {token_usage.completion_tokens:,}"
                 )
 
@@ -419,6 +425,8 @@ def build_planner_node(
             "cumulative_prompt_tokens": cumulative_prompt_tokens,
             "cumulative_completion_tokens": cumulative_completion_tokens,
             "last_prompt_tokens": token_usage.prompt_tokens if context_manager and token_usage else 0,
+            # Reset auto-compression flag (set to False if no compression happened)
+            "auto_compressed_this_request": False,
         }
 
         log_node_exit(LOGGER, "planner", updates)

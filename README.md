@@ -78,108 +78,39 @@ MAX_LOOPS=100                   # Max agent loop iterations (1-500)
 MAX_MESSAGE_HISTORY=40          # Message history size (10-100)
 ```
 
-**Context Management** (NEW):
+**Context Management** ⭐ NEW:
 
-智能上下文压缩功能，通过渐进式警告和分层压缩策略管理长对话的 Token 使用。
+Automatic context compression with silent operation. When token usage exceeds 95%, the system automatically compresses older messages via LLM summarization while preserving recent context.
 
 ```bash
-# 总开关
+# Enable/disable context management
 CONTEXT_MANAGEMENT_ENABLED=true
-# 是否启用上下文管理功能
-# 默认: true
-# 说明: 关闭后不再监控 token 使用，也不会触发压缩
 
-# Token 使用监控阈值 (基于累积 prompt tokens 占模型上下文窗口的比例)
-CONTEXT_INFO_THRESHOLD=0.75
-# 信息提示阈值
-# 默认: 0.75 (75%)，范围: 0.5-0.95 (ge=0.5, le=0.95)
-# 说明: 达到此阈值时显示信息提示，建议使用 compact_context 工具
-# 影响: 调低会更早触发提示，调高会延迟提示
-# 示例: 0.70 = 90K/128K tokens 时提示，0.80 = 102K/128K tokens 时提示
+# Token monitoring thresholds
+CONTEXT_INFO_THRESHOLD=0.75        # 75% - Log info message
+CONTEXT_WARNING_THRESHOLD=0.85     # 85% - Log warning
+CONTEXT_CRITICAL_THRESHOLD=0.95    # 95% - Trigger auto-compression
 
-CONTEXT_WARNING_THRESHOLD=0.85
-# 警告阈值
-# 默认: 0.85 (85%)，范围: 0.6-0.95 (ge=0.6, le=0.95)
-# 说明: 达到此阈值时显示强警告，强烈建议立即压缩
-# 影响: 调低会更早触发警告，调高会延迟警告（可能导致达到 critical 阈值）
-# 示例: 0.80 = 102K/128K tokens 时警告，0.90 = 115K/128K tokens 时警告
+# Recent message preservation (hybrid strategy)
+CONTEXT_KEEP_RECENT_RATIO=0.15     # Keep 15% of context window as recent
+CONTEXT_KEEP_RECENT_MESSAGES=10    # Or keep at least 10 messages (whichever reached first)
 
-CONTEXT_CRITICAL_THRESHOLD=0.95
-# 临界阈值
-# 默认: 0.95 (95%)，范围: 0.8-0.99 (ge=0.8, le=0.99)
-# 说明: 达到此阈值时自动触发 summarize 压缩（极简摘要）
-# 影响: 调低会更早自动压缩，调高可能导致接近 token 上限
-# 示例: 0.90 = 115K/128K tokens 时自动压缩，0.98 = 125K/128K tokens 时自动压缩
+# Compression trigger condition
+CONTEXT_MIN_MESSAGES_TO_COMPRESS=15  # Minimum messages before compression
 
-# 分层压缩策略配置
-CONTEXT_KEEP_RECENT=10
-# 保留最近消息数量
-# 默认: 10，范围: 5-50 (ge=5, le=50)
-# 说明: 压缩时保持最近 N 条消息完整不压缩（保留当前上下文）
-# 影响: 调高会保留更多细节但压缩效果降低，调低会压缩更多但可能丢失近期上下文
-# 示例: 5 = 保留最近 5 条（激进压缩），20 = 保留最近 20 条（保守压缩）
-
-CONTEXT_COMPACT_MIDDLE=30
-# 详细摘要消息数量
-# 默认: 30，范围: 10-100 (ge=10, le=100)
-# 说明: 对中间层 N 条消息进行详细摘要（保留技术细节、文件路径、工具调用等）
-# 影响: 调高会保留更多技术细节但压缩效果降低，调低会摘要更简略
-# 示例: 20 = 中间 20 条详细摘要，50 = 中间 50 条详细摘要
-
-# 动态策略决策配置
-CONTEXT_COMPRESSION_RATIO_THRESHOLD=0.4
-# 压缩率阈值
-# 默认: 0.4 (40%)，范围: 0.2-0.8 (ge=0.2, le=0.8)
-# 说明: 当上次压缩率 > 此值时，说明 compact 效果不佳，下次切换为 summarize
-# 影响: 调低会更容易切换到 summarize（激进），调高会更倾向使用 compact（保守）
-# 示例: 0.3 = 压缩率 > 30% 就切换，0.5 = 压缩率 > 50% 才切换
-
-CONTEXT_COMPACT_CYCLE_LIMIT=3
-# 连续 compact 次数限制
-# 默认: 3，范围: 1-10 (ge=1, le=10)
-# 说明: 连续使用 compact 策略 N 次后，强制切换为 summarize（防止压缩效果递减）
-# 影响: 调低会更快切换到 summarize（激进），调高会延长 compact 周期（保守）
-# 示例: 2 = compact 两次后切换，5 = compact 五次后切换
-
-# 后备策略（Kimi-inspired）
-CONTEXT_MAX_HISTORY=100
-# 最大历史消息数量
-# 默认: 100，范围: 30-200 (ge=30, le=200)
-# 说明: 当 LLM 压缩失败时，降级为简单截断策略，仅保留 SystemMessage + 最近 N 条消息
-# 影响: 调高会保留更多历史但可能接近 token 上限，调低会丢失更多历史
-# 示例: 50 = 紧急情况保留 50 条，150 = 紧急情况保留 150 条
+# Emergency fallback (if LLM compression fails)
+CONTEXT_MAX_HISTORY=100            # Keep last 100 messages max
 ```
 
-**配置建议**:
+**How it works**:
+1. Token usage monitored after each LLM call
+2. When exceeds 95%, system routes to dedicated summarization node
+3. Old messages compressed via LLM, recent messages preserved
+4. Agent continues answering user's question seamlessly
 
-1. **保守型配置**（适合需要保留详细上下文的场景）:
-   ```bash
-   CONTEXT_INFO_THRESHOLD=0.70          # 更早提示
-   CONTEXT_KEEP_RECENT=20               # 保留更多最近消息
-   CONTEXT_COMPACT_MIDDLE=50            # 详细摘要更多消息
-   CONTEXT_COMPRESSION_RATIO_THRESHOLD=0.5  # 更倾向使用 compact
-   CONTEXT_COMPACT_CYCLE_LIMIT=5        # 更长的 compact 周期
-   ```
+**User Experience**: Completely silent - no notifications. Example: 302 messages (~123K tokens, 96% usage) → 13 messages (~6.5K tokens, 95% reduction).
 
-2. **激进型配置**（适合需要最大化 token 节省的场景）:
-   ```bash
-   CONTEXT_INFO_THRESHOLD=0.80          # 更晚提示
-   CONTEXT_KEEP_RECENT=5                # 仅保留最近 5 条
-   CONTEXT_COMPACT_MIDDLE=20            # 精简摘要
-   CONTEXT_COMPRESSION_RATIO_THRESHOLD=0.3  # 更容易切换到 summarize
-   CONTEXT_COMPACT_CYCLE_LIMIT=2        # 更快切换到 summarize
-   ```
-
-3. **平衡型配置**（默认值，适合大多数场景）:
-   ```bash
-   # 使用上述默认值即可
-   ```
-
-**Pydantic 字段约束说明**:
-- `ge` (greater than or equal): 最小值约束，配置不能低于此值
-- `le` (less than or equal): 最大值约束，配置不能超过此值
-- 示例: `ge=0.5, le=0.95` 表示有效范围是 0.5 ≤ 值 ≤ 0.95
-- 违反约束时会在启动时报 ValidationError
+For detailed architecture, see [docs/ARCHITECTURE.md - Section 1.5](docs/ARCHITECTURE.md)
 
 **Observability**:
 ```bash

@@ -30,65 +30,52 @@ class CompressionResult:
 
 # ===== Prompt 模板 =====
 
-COMPACT_PROMPT = """你的任务是创建一个详细的对话摘要，特别关注用户的明确请求和你之前的操作。这个摘要应该全面捕捉技术细节、代码模式和架构决策，这些对于在不丢失上下文的情况下继续开发工作至关重要。
+COMPACT_PROMPT = """你的任务是为一个通用 AI 助手的对话历史创建详细摘要。
 
 **摘要要求：**
-
-按时间顺序分析每条消息和对话部分，识别：
+请按时间顺序分析对话，提取以下关键信息：
 
 1. **用户请求和意图**
-   - 明确记录所有用户的请求和意图
+   - 明确记录用户的所有请求和意图
 
-2. **关键技术概念**
-   - 列出所有重要的技术概念、技术和框架
+2. **关键信息**
+   - 提到的重要概念、专业术语
+   - 数据、事实、时间点
 
-3. **文件和代码操作**
-   - 列举具体的文件和代码部分（检查、修改或创建）
-   - 特别关注最近的消息，包括：
-     * 完整的文件路径（如 `uploads/report.pdf`, `outputs/analysis.md`）
-     * 关键代码片段（函数签名、重要逻辑）
-     * 操作原因和结果的摘要
+3. **文件操作**
+   - 提到的文件路径（如 `uploads/report.pdf`, `outputs/result.txt`）
+   - 文件内容摘要、操作原因
 
 4. **工具调用记录**
-   - 记录所有工具调用及其结果
+   - 记录工具调用及结果
    - 格式：`工具名(参数) → 结果`
-   - 说明调用原因和影响
 
 5. **技能使用**
-   - 记录使用的技能（如 @pdf, @docx）
-   - 说明技能的用途和效果
+   - 使用的技能（如 @pdf, @docx）及用途
 
 6. **错误和修复**
-   - 列出所有遇到的错误
-   - 详细说明修复方法
-   - 记录用户反馈（特别是用户要求不同做法时）
+   - 遇到的错误、问题
+   - 解决方法和用户反馈
 
-7. **TODO 任务状态**
-   - 列出所有待办任务的状态
-   - 标记已完成、进行中和待完成的任务
-
-8. **当前工作**
-   - 详细描述在此摘要请求之前正在进行的工作
-   - 特别关注最近的消息
-   - 包括文件名和代码片段
+7. **当前工作**
+   - 最新的工作进展
+   - 待完成的事项（用户明确提到的）
 
 **输出格式：**
-
 请使用以下结构提供摘要：
 
 ## 用户请求和意图
 [详细描述]
 
-## 关键技术概念
-- [概念 1]
-- [概念 2]
+## 关键信息
+- [信息 1]
+- [信息 2]
 ...
 
-## 文件和代码操作
+## 文件操作
 - **文件路径 1**
   - 操作原因: ...
   - 更改摘要: ...
-  - 重要代码片段: ...
 - **文件路径 2**
   ...
 
@@ -105,40 +92,19 @@ COMPACT_PROMPT = """你的任务是创建一个详细的对话摘要，特别关
   - 修复方法: ...
   - 用户反馈: ...
 
-## TODO 任务状态
-- ✅ [已完成任务]
-- ⏳ [进行中任务]
-- ⏸ [待完成任务]
-
 ## 当前工作
-[详细描述当前正在进行的工作，包括文件名和代码片段]
+[详细描述当前正在进行的工作]
 
 ---
 
-请仅输出摘要内容，不要包含额外的说明或元数据。
-"""
-
-SUMMARIZE_PROMPT = """请将以下对话总结为一个简洁的摘要（不超过 200 字）。
-
-**必须包含：**
-1. 主要任务
-2. 关键文件路径（如 `uploads/file.pdf`, `outputs/result.md`）
-3. 主要工具调用（如 `read_file`, `write_file`）
-4. 解决的问题
-5. 当前状态
-
-**格式要求：**
-- 使用简洁的中文
-- 直接输出摘要内容
-- 不要包含"摘要："等前缀
-
-**示例：**
-用户要求分析 uploads/report.pdf 并生成报告。使用 read_file 读取PDF（15页，Q3财报），search_file 查找营收数据，write_file 生成 outputs/analysis.md。修复了索引未创建的错误。已完成报告生成，等待用户确认。
-
----
+**重要提示：**
+- 保持简洁（控制在 2000 字以内）
+- 不要输出 TODO 列表（系统会动态追踪）
+- 仅输出摘要内容，不要包含额外说明或元数据
 
 请开始总结：
 """
+
 
 
 class ContextCompressor:
@@ -151,44 +117,33 @@ class ContextCompressor:
     async def compress_messages(
         self,
         messages: List[BaseMessage],
-        strategy: Literal["auto", "compact", "summarize"],
         model_invoker: Callable,  # 用于调用 LLM 的函数
-        compact_count: int = 0,
-        last_compression_ratio: Optional[float] = None
+        context_window: int = 128000  # 模型的 context window
     ) -> CompressionResult:
         """
         执行消息压缩
 
         Args:
             messages: 待压缩的消息列表
-            strategy: 压缩策略 (auto/compact/summarize)
             model_invoker: LLM 调用函数
-            compact_count: 当前压缩次数
-            last_compression_ratio: 上次压缩率
+            context_window: 模型的 context window 大小
 
         Returns:
             CompressionResult 包含压缩后的消息和详细报告
         """
-        # 1. 决定策略
-        if strategy == "auto":
-            from .token_tracker import TokenTracker
-            tracker = TokenTracker(self.settings)
-            strategy = tracker._decide_strategy(compact_count, last_compression_ratio)
-
-        logger.info(f"Starting compression with strategy: {strategy}")
+        logger.info("Starting context compression")
 
         # 2. 记录压缩前状态
         before_count = len(messages)
         before_tokens = self._estimate_tokens(messages)
 
         # 3. 分层消息
-        partitioned = self._partition_messages(messages, strategy)
+        partitioned = self._partition_messages(messages, context_window)
 
         # 4. 执行压缩
         try:
             compressed = await self._compress_partitioned(
                 partitioned,
-                strategy,
                 model_invoker
             )
         except Exception as e:
@@ -199,6 +154,8 @@ class ContextCompressor:
             truncator = MessageTruncator(self.settings)
             compressed = truncator.truncate(messages)
             strategy = "emergency_truncate"
+        else:
+            strategy = "compact"
 
         # 5. 记录压缩后状态
         after_count = len(compressed)
@@ -223,128 +180,155 @@ class ContextCompressor:
     def _partition_messages(
         self,
         messages: List[BaseMessage],
-        strategy: Literal["compact", "summarize"]
+        context_window: int
     ) -> Dict[str, List[BaseMessage]]:
         """
-        分层消息
+        划分消息（混合策略：Token 比例 + 消息数）
 
-        分层策略：
+        策略：
         - System: 保留所有 SystemMessage
-        - Recent: 保留最近 N 条（完整）
-        - Middle: 中间 M 条（需要压缩）
-        - Old: 剩余消息（需要压缩）
+        - Recent: 保留最近 N% context window 或 M 条消息（取先到者）
+        - Old: 剩余所有消息（将被压缩）
         """
-        # 分离 SystemMessage
+        # 1. 分离 SystemMessage
         system_messages = [m for m in messages if isinstance(m, SystemMessage)]
         non_system_messages = [m for m in messages if not isinstance(m, SystemMessage)]
 
-        # 配置
-        keep_recent = self.context_settings.keep_recent_messages
-        compact_middle = self.context_settings.compact_middle_messages
+        # 2. 配置（根据 context window 计算实际 token 数）
+        keep_recent_tokens = int(context_window * self.context_settings.keep_recent_ratio)
+        keep_recent_messages = self.context_settings.keep_recent_messages
 
-        # 分层
-        total = len(non_system_messages)
+        logger.debug(
+            f"Partition config: keep_recent={keep_recent_tokens} tokens or {keep_recent_messages} msgs "
+            f"(context_window={context_window})"
+        )
 
-        if total <= keep_recent:
-            # 消息太少，不需要分层
-            return {
-                "system": system_messages,
-                "old": [],
-                "middle": [],
-                "recent": non_system_messages
-            }
+        # 3. 估算每条消息的 token（粗略）
+        message_tokens = [self._estimate_single_message_tokens(m) for m in non_system_messages]
 
-        # Recent: 最后 N 条
-        recent = non_system_messages[-keep_recent:]
-        remaining = non_system_messages[:-keep_recent]
+        # 4. 从后往前扫描，划分 Recent
+        recent_tokens = 0
+        recent_count = 0
+        for i in range(len(non_system_messages) - 1, -1, -1):
+            recent_tokens += message_tokens[i]
+            recent_count += 1
 
-        if len(remaining) <= compact_middle:
-            # 剩余消息不多，全部作为 middle
-            return {
-                "system": system_messages,
-                "old": [],
-                "middle": remaining,
-                "recent": recent
-            }
+            # 达到任一条件就停止
+            if recent_tokens >= keep_recent_tokens or recent_count >= keep_recent_messages:
+                break
 
-        # Old + Middle
-        old = remaining[:-compact_middle]
-        middle = remaining[-compact_middle:]
+        recent = non_system_messages[-recent_count:] if recent_count > 0 else []
+        old = non_system_messages[:-recent_count] if recent_count > 0 else non_system_messages
+
+        old_tokens = sum(message_tokens[:len(old)]) if old else 0
 
         logger.debug(
             f"Partitioned messages: system={len(system_messages)}, "
-            f"old={len(old)}, middle={len(middle)}, recent={len(recent)}"
+            f"old={len(old)} (~{old_tokens} tokens), "
+            f"recent={len(recent)} (~{recent_tokens} tokens)"
         )
 
         return {
             "system": system_messages,
             "old": old,
-            "middle": middle,
+            "middle": [],  # 保持兼容性，但为空
             "recent": recent
         }
+
+    def _estimate_single_message_tokens(self, msg: BaseMessage) -> int:
+        """估算单条消息的 token（粗略）
+
+        使用简单的字符数估算：
+        - 中文平均 1 token ≈ 2 chars
+        - 英文平均 1 token ≈ 4 chars
+        - 取平均值: 1 token ≈ 2 chars
+        """
+        content_len = len(str(msg.content))
+        return content_len // 2
 
     async def _compress_partitioned(
         self,
         partitioned: Dict[str, List[BaseMessage]],
-        strategy: Literal["compact", "summarize"],
         model_invoker: Callable
     ) -> List[BaseMessage]:
         """
         压缩分层后的消息
 
-        策略：
-        - compact: Old + Middle 都使用详细摘要
-        - summarize: Old 使用极简摘要，Middle 使用详细摘要
+        策略：一次性压缩 Old + Middle，只保留 Recent
         """
         compressed = []
 
         # 1. 保留 SystemMessage
         compressed.extend(partitioned["system"])
 
-        # 2. 压缩 Old
-        if partitioned["old"]:
-            old_strategy = "summarize" if strategy == "summarize" else "compact"
-            old_summary = await self._summarize_messages(
-                partitioned["old"],
-                old_strategy,
+        # 2. 合并 Old + Middle，一次性压缩
+        messages_to_compress = partitioned["old"] + partitioned["middle"]
+
+        if messages_to_compress:
+            logger.info(f"Compressing {len(messages_to_compress)} messages (Old + Middle) in single LLM call")
+            summary = await self._summarize_messages(
+                messages_to_compress,
                 model_invoker
             )
             compressed.append(SystemMessage(content=f"""# 对话历史摘要（系统自动生成）
 
-以下是早期对话的 {old_strategy} 摘要（原始 {len(partitioned["old"])} 条消息）：
+以下是早期对话的摘要（原始 {len(messages_to_compress)} 条消息）：
 
-{old_summary}
-
----
-📝 本消息由系统自动生成，用于节省 token。
-"""))
-
-        # 3. 压缩 Middle
-        if partitioned["middle"]:
-            middle_summary = await self._summarize_messages(
-                partitioned["middle"],
-                "compact",  # Middle 总是使用详细摘要
-                model_invoker
-            )
-            compressed.append(SystemMessage(content=f"""# 近期对话摘要（系统自动生成）
-
-以下是近期对话的 compact 摘要（原始 {len(partitioned["middle"])} 条消息）：
-
-{middle_summary}
+{summary}
 
 ---
 📝 本消息由系统自动生成，用于节省 token。
 """))
 
-        # 4. 保留 Recent（完整）
-        compressed.extend(partitioned["recent"])
+        # 3. 保留 Recent（完整），但需要清理孤儿 ToolMessage
+        recent_messages = partitioned["recent"]
+        cleaned_recent = self._clean_orphan_tool_messages(recent_messages)
+        compressed.extend(cleaned_recent)
 
         return compressed
+
+    def _clean_orphan_tool_messages(self, messages: List[BaseMessage]) -> List[BaseMessage]:
+        """
+        清理孤儿 ToolMessage（没有对应 tool_call 的 ToolMessage）
+
+        在压缩后，如果 AIMessage (包含 tool_calls) 被压缩掉了，
+        但对应的 ToolMessage 被保留在 Recent 中，会导致 API 错误。
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            清理后的消息列表
+        """
+        if not messages:
+            return messages
+
+        # 收集所有 tool_call_id
+        valid_tool_call_ids = set()
+        for msg in messages:
+            if isinstance(msg, AIMessage) and hasattr(msg, 'tool_calls') and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    if 'id' in tc:
+                        valid_tool_call_ids.add(tc['id'])
+
+        # 过滤掉孤儿 ToolMessage
+        cleaned = []
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                # 检查是否有对应的 tool_call_id
+                tool_call_id = getattr(msg, 'tool_call_id', None)
+                if tool_call_id and tool_call_id in valid_tool_call_ids:
+                    cleaned.append(msg)
+                else:
+                    logger.debug(f"Removing orphan ToolMessage: tool_call_id={tool_call_id}")
+            else:
+                cleaned.append(msg)
+
+        return cleaned
 
     async def _summarize_messages(
         self,
         messages: List[BaseMessage],
-        strategy: Literal["compact", "summarize"],
         model_invoker: Callable
     ) -> str:
         """
@@ -352,21 +336,19 @@ class ContextCompressor:
 
         Args:
             messages: 待摘要的消息
-            strategy: compact (详细) or summarize (简洁)
-            model_invoker: LLM 调用函数
+            model_invoker: LLM 调用函数（接受 prompt 和 max_tokens）
 
         Returns:
             摘要文本
         """
-        # 选择 Prompt
-        prompt = COMPACT_PROMPT if strategy == "compact" else SUMMARIZE_PROMPT
-
         # 构造输入
         messages_text = self._format_messages_for_summary(messages)
-        full_prompt = f"{prompt}\n\n{messages_text}"
+        full_prompt = f"{COMPACT_PROMPT}\n\n{messages_text}"
 
-        # 调用 LLM
-        summary = await model_invoker(full_prompt)
+        # 调用 LLM（限制输出长度为 2000 字）
+        # 中文: 1 token ≈ 1.5-2 字符，2000 字 ≈ 1200 tokens
+        # 加 20% buffer: 1200 * 1.2 = 1440 tokens
+        summary = await model_invoker(full_prompt, max_tokens=1440)
 
         return summary.strip()
 

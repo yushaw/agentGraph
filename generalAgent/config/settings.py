@@ -245,30 +245,28 @@ class ContextManagementSettings(BaseSettings):
     - info_threshold: 信息提示阈值（75%）
     - warning_threshold: 警告阈值（85%）
     - critical_threshold: 强制压缩阈值（95%）
-    - keep_recent_messages: 保留最近消息数
-    - compact_middle_messages: 压缩中间消息数
-    - compression_ratio_threshold: 压缩率阈值（决定策略切换）
-    - compact_cycle_limit: 连续 compact 次数限制
-    - max_history_messages: 硬上限（后备策略）
+    - keep_recent_ratio: 保留最近消息的 token 比例（相对于 context window）
+    - keep_recent_messages: 保留最近消息数（混合策略）
+    - min_messages_to_compress: 触发压缩的最小消息数（默认 15 条）
+    - max_history_messages: Emergency truncation 后备策略（保留最近 N 条消息）
     """
 
     enabled: bool = Field(default=True, alias="CONTEXT_MANAGEMENT_ENABLED")
 
     # Token 监控阈值
-    # ge 下限 le 上限
-    info_threshold: float = Field(default=0.75, ge=0.5, le=0.95, alias="CONTEXT_INFO_THRESHOLD")
-    warning_threshold: float = Field(default=0.85, ge=0.6, le=0.95, alias="CONTEXT_WARNING_THRESHOLD")
+    info_threshold: float = Field(default=0.7, ge=0.6, le=0.95, alias="CONTEXT_INFO_THRESHOLD")
+    warning_threshold: float = Field(default=0.8, ge=0.7, le=0.95, alias="CONTEXT_WARNING_THRESHOLD")
     critical_threshold: float = Field(default=0.95, ge=0.8, le=0.99, alias="CONTEXT_CRITICAL_THRESHOLD")
 
-    # 分层策略配置
-    keep_recent_messages: int = Field(default=10, ge=5, le=50, alias="CONTEXT_KEEP_RECENT")
-    compact_middle_messages: int = Field(default=30, ge=10, le=100, alias="CONTEXT_COMPACT_MIDDLE")
+    # 保留最近消息的策略（混合模式：Token 比例 + 消息数）
+    # 比例相对于模型 context window，例如 0.15 表示保留 15% 的 context window
+    keep_recent_ratio: float = Field(default=0.15, ge=0.05, le=0.5, alias="CONTEXT_KEEP_RECENT_RATIO")
+    keep_recent_messages: int = Field(default=8, ge=5, le=50, alias="CONTEXT_KEEP_RECENT_MESSAGES")
 
-    # 动态策略决策配置
-    compression_ratio_threshold: float = Field(default=0.4, ge=0.2, le=0.8, alias="CONTEXT_COMPRESSION_RATIO_THRESHOLD")
-    compact_cycle_limit: int = Field(default=3, ge=1, le=10, alias="CONTEXT_COMPACT_CYCLE_LIMIT")
+    # 压缩触发条件
+    min_messages_to_compress: int = Field(default=5, ge=5, le=100, alias="CONTEXT_MIN_MESSAGES_TO_COMPRESS")
 
-    # Kimi-inspired 后备策略
+    # Emergency truncation 后备策略
     max_history_messages: int = Field(default=100, ge=30, le=200, alias="CONTEXT_MAX_HISTORY")
 
     model_config = SettingsConfigDict(

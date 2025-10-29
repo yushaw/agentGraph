@@ -54,9 +54,11 @@ class AppState(TypedDict, total=False):
     new_uploaded_files: List[Any]  # Files uploaded in current turn (for reminder generation, cleared after use)
 
     # ========== Context management (Token tracking and compression) ==========
-    cumulative_prompt_tokens: int  # Cumulative prompt tokens since last compression
+    cumulative_prompt_tokens: int  # Current context size in tokens (not cumulative!)
     cumulative_completion_tokens: int  # Cumulative completion tokens since last compression
     last_prompt_tokens: int  # Last LLM call's prompt tokens (for logging)
     compact_count: int  # Number of times context has been compressed
     last_compact_strategy: Optional[Literal["compact", "summarize"]]  # Last compression strategy used
     last_compression_ratio: Optional[float]  # Last compression ratio (for dynamic strategy selection)
+    auto_compressed_this_request: bool  # Flag to prevent multiple auto-compressions in one request
+    needs_compression: bool  # Flag set by planner when token usage is critical, read by routing

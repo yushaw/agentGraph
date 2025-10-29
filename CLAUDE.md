@@ -785,6 +785,54 @@ max_loops = settings.governance.max_loops  # Default: 100
 - Removed manual fallback patterns (`or _env()`) from business logic
 - All 5 reflective HITL tests now pass with proper model initialization
 
+## Context Management Configuration ⭐ NEW
+
+AgentGraph includes automatic context compression to manage long conversations efficiently. When token usage exceeds the critical threshold (default: 95%), the system automatically compresses older messages while preserving recent context.
+
+### Configuration Parameters
+
+All context management settings are configured via `.env` file:
+
+```bash
+# Enable/disable context management
+CONTEXT_MANAGEMENT_ENABLED=true
+
+# Token monitoring thresholds (0.01-0.99)
+CONTEXT_INFO_THRESHOLD=0.75        # 75% - Log info message
+CONTEXT_WARNING_THRESHOLD=0.85     # 85% - Log warning
+CONTEXT_CRITICAL_THRESHOLD=0.95    # 95% - Trigger auto-compression
+
+# Recent message preservation
+CONTEXT_KEEP_RECENT_RATIO=0.15     # Keep 15% of context window as recent
+CONTEXT_KEEP_RECENT_MESSAGES=10    # Or keep at least 10 messages (whichever reached first)
+
+# Compression trigger condition
+CONTEXT_MIN_MESSAGES_TO_COMPRESS=15  # Minimum messages before compression
+
+# Emergency fallback (if LLM compression fails)
+CONTEXT_MAX_HISTORY=100            # Keep last 100 messages max
+```
+
+### How Auto-Compression Works
+
+1. **Token Monitoring** - System tracks `cumulative_prompt_tokens` after each LLM call
+2. **Critical Detection** - When usage exceeds `CONTEXT_CRITICAL_THRESHOLD`, planner sets `needs_compression` flag
+3. **Routing to Compression** - Conditional routing directs to dedicated summarization node
+4. **Silent Compression** - Old messages compressed via LLM, recent messages preserved
+5. **Return to Agent** - After compression, flow returns to agent to continue answering user's question
+
+**User Experience**: Compression is completely silent (no notifications). The agent continues the conversation seamlessly.
+
+**Example**: A conversation with 302 messages (~123K tokens, 96% usage) compresses to 13 messages (~6.5K tokens, 95% reduction) while preserving full context through LLM summarization.
+
+**Key Files**:
+- `generalAgent/graph/nodes/summarization.py` - Dedicated compression node
+- `generalAgent/graph/routing.py` - Routing logic with compression trigger
+- `generalAgent/context/compressor.py` - Core compression implementation
+- `generalAgent/config/settings.py` - Configuration schema
+
+For architectural details, see [docs/ARCHITECTURE.md - Section 1.5](docs/ARCHITECTURE.md).
+
 ## Refactoring Notes
 
 See `REFACTORING_NOTES.md` for detailed information about the recent tools and skills refactoring, including:
