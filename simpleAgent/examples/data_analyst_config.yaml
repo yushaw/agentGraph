@@ -1,0 +1,31 @@
+# Data Analyst Agent Configuration Example
+# 数据分析 Agent 配置示例
+
+agent:
+  name: "DataAnalystAgent"
+  description: "专业数据分析 Agent"
+
+prompt:
+  template_file: "simpleAgent/config/prompt_templates/data_analyst.jinja2"
+
+  # 默认参数
+  default_params:
+    role: "数据分析师"
+    task: "执行数据分析任务"
+    output_format: "Markdown 报告"
+
+tools:
+  # 启用的工具
+  enabled:
+    - read_file
+    - write_file
+    - search_file
+    - find_files
+    - ask_human
+
+governance:
+  max_iterations: 20
+  max_loops: 5
+
+model:
+  type: "base"  # 使用基础模型

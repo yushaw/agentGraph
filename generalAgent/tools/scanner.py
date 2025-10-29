@@ -56,19 +56,27 @@ def scan_tools_directory(directory: Path) -> Dict[str, BaseTool]:
             module_name = tool_file.stem
 
             # Try to construct module path from directory structure
-            # Assume directory is like .../agentgraph/tools/builtin
-            # We need to find where "agentgraph" starts
+            # Find the package root by looking for directory containing __init__.py
+            # that also has sys.path entry as parent
             parts = directory.resolve().parts
-            agentgraph_idx = None
-            for i, part in enumerate(parts):
-                if part == "agentgraph":
-                    agentgraph_idx = i
+            full_module_path = None
+
+            # Walk up the directory tree to find the package root
+            current_dir = directory
+            module_path_parts = []
+
+            while current_dir.parent != current_dir:  # Not at filesystem root
+                # Check if current directory is a Python package
+                if (current_dir / "__init__.py").exists():
+                    module_path_parts.insert(0, current_dir.name)
+                    current_dir = current_dir.parent
+                else:
+                    # Found non-package directory, this is likely the package root
                     break
 
-            if agentgraph_idx is not None:
-                # Build module path: agentgraph.tools.builtin.module_name
-                module_parts = parts[agentgraph_idx:] + (module_name,)
-                full_module_path = ".".join(module_parts)
+            # Build full module path
+            if module_path_parts:
+                full_module_path = ".".join(module_path_parts + [module_name])
             else:
                 # Fallback: just use module_name
                 full_module_path = module_name

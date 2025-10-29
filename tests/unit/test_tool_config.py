@@ -19,11 +19,11 @@ core:
 optional:
   get_weather:
     enabled: true
-    always_available: false
+    available_to_subagent: false
 
   http_fetch:
     enabled: false
-    always_available: false
+    available_to_subagent: false
 
 directories:
   builtin: "generalAgent/tools/builtin"
@@ -52,17 +52,17 @@ def test_get_all_enabled_tools(sample_config):
     assert "http_fetch" not in all_enabled
 
 
-def test_is_always_available(sample_config):
+def test_is_available_to_subagent(sample_config):
     """Test checking if tool is always available."""
     config = ToolConfig(sample_config)
 
     # Core tools are always available
-    assert config.is_always_available("now") is True
-    assert config.is_always_available("calc") is True
+    assert config.is_available_to_subagent("now") is True
+    assert config.is_available_to_subagent("calc") is True
 
     # Optional tools check their config
-    assert config.is_always_available("get_weather") is False
-    assert config.is_always_available("http_fetch") is False
+    assert config.is_available_to_subagent("get_weather") is False
+    assert config.is_available_to_subagent("http_fetch") is False
 
 
 def test_get_directories(sample_config):

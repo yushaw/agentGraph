@@ -74,11 +74,11 @@ async def test_wrapper_metadata(mcp_tools):
     assert echo_tool.original_tool_name == "echo"
     assert echo_tool.name == "mcp_echo"
     assert "Echo back a message" in echo_tool.description
-    assert echo_tool.always_available is False
+    assert echo_tool.available_to_subagent is False
 
-    # Check always_available tool
+    # Check available_to_subagent tool
     time_tool = next(t for t in mcp_tools if t.name == "mcp_time")
-    assert time_tool.always_available is True
+    assert time_tool.available_to_subagent is True
 
 
 @pytest.mark.asyncio

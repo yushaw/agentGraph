@@ -1814,7 +1814,7 @@ planner = build_planner_node(...)
 
 3. **Tool Management**:
    - Don't load all tools at startup
-   - Don't set all tools to `always_available: true`
+   - Don't set all tools to `available_to_subagent: true`
    - Don't skip @mention for dangerous tools
 
 4. **Delegated agents**:

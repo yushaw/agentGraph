@@ -333,7 +333,7 @@ core:
 optional:
   http_fetch:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     category: "network"
     tags: ["network", "read"]
 
@@ -362,16 +362,16 @@ class ToolConfig:
 
         return enabled
 
-    def is_always_available(self, tool_name: str) -> bool:
+    def is_available_to_subagent(self, tool_name: str) -> bool:
         """Check if tool should be in all contexts"""
         meta = self._find_tool_config(tool_name)
-        return meta.get("always_available", False)
+        return meta.get("available_to_subagent", False)
 ```
 
 **Design Considerations**:
 - Configuration-driven, no code changes needed
 - `core` vs `optional` distinguishes system tools from optional tools
-- `always_available` controls global visibility
+- `available_to_subagent` controls global visibility
 
 ---
 
@@ -389,7 +389,7 @@ class ToolMeta:
     category: str
     tags: List[str]
     description: str
-    always_available: bool = False
+    available_to_subagent: bool = False
     dependencies: List[str] = field(default_factory=list)
 ```
 
@@ -425,7 +425,7 @@ for meta in all_metadata:
 optional:
   todo_write:
     enabled: true
-    always_available: true  # Visible in all contexts
+    available_to_subagent: true  # Visible in all contexts
 ```
 
 **Implementation**:
@@ -434,7 +434,7 @@ optional:
 # generalAgent/runtime/app.py:89-99
 persistent = []
 for tool_name in enabled_tools:
-    if tool_config.is_always_available(tool_name):
+    if tool_config.is_available_to_subagent(tool_name):
         try:
             persistent.append(registry.get_tool(tool_name))
         except KeyError:
@@ -829,19 +829,19 @@ core: []  # Empty by default
 optional:
   pdf:
     enabled: false                           # Show in catalog and load at startup
-    always_available: false                  # Keep loaded across all sessions
+    available_to_subagent: false                  # Keep loaded across all sessions
     description: "PDF processing and form filling"
     auto_load_on_file_types: ["pdf"]        # Auto-load when .pdf files uploaded
 
   docx:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "DOCX file processing"
     auto_load_on_file_types: ["docx"]
 
   xlsx:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "Excel file processing"
     auto_load_on_file_types: ["xlsx", "xls"]
 ```
@@ -853,7 +853,7 @@ optional:
   - `false`: Skill hidden from catalog, only loads via @mention or file upload
   - **Use case**: Hide experimental or rarely-used skills to reduce prompt noise
 
-- **`always_available`**: Keep skill loaded across all sessions (not recommended)
+- **`available_to_subagent`**: Keep skill loaded across all sessions (not recommended)
   - Default: `false` (skills load per-session)
 
 - **`description`**: Human-readable description shown in catalog

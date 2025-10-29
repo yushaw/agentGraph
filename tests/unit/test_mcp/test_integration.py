@@ -69,21 +69,21 @@ async def test_tool_registry_integration(test_mcp_config, mcp_manager):
 
 
 @pytest.mark.asyncio
-async def test_always_available_tools(test_mcp_config, mcp_manager):
-    """Test always_available tool filtering."""
+async def test_available_to_subagent_tools(test_mcp_config, mcp_manager):
+    """Test available_to_subagent tool filtering."""
     from generalAgent.tools.mcp import load_mcp_tools
 
     mcp_tools = load_mcp_tools(test_mcp_config, mcp_manager)
 
-    # Check which tools are always_available
-    always_available = [t for t in mcp_tools if t.always_available]
-    not_always_available = [t for t in mcp_tools if not t.always_available]
+    # Check which tools are available_to_subagent
+    available_to_subagent = [t for t in mcp_tools if t.available_to_subagent]
+    not_available_to_subagent = [t for t in mcp_tools if not t.available_to_subagent]
 
-    # From config: only mcp_time is always_available
-    assert len(always_available) == 1
-    assert len(not_always_available) == 2
+    # From config: only mcp_time is available_to_subagent
+    assert len(available_to_subagent) == 1
+    assert len(not_available_to_subagent) == 2
 
-    assert always_available[0].name == "mcp_time"
+    assert available_to_subagent[0].name == "mcp_time"
 
 
 @pytest.mark.asyncio

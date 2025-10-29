@@ -97,27 +97,28 @@ def _create_tool_registry(skill_registry: SkillRegistry, mcp_tools: Optional[Lis
     for meta in all_metadata:
         try:
             registry.register_meta(meta)
-            LOGGER.debug(f"  ✓ Registered metadata for: {meta.name} (always_available={meta.always_available})")
+            LOGGER.debug(f"  ✓ Registered metadata for: {meta.name} (available_to_subagent={meta.available_to_subagent})")
         except KeyError:
             # Tool not registered, skip metadata
             LOGGER.warning(f"  ✗ Metadata found but tool not registered: {meta.name}")
 
-    # Build persistent (always available) tools list from config
+    # Build persistent (available to subagent) tools list from config
     persistent = []
     for tool_name in enabled_tools:
-        if tool_config.is_always_available(tool_name):
+        if tool_config.is_available_to_subagent(tool_name):
             try:
                 persistent.append(registry.get_tool(tool_name))
             except KeyError:
                 LOGGER.warning(f"Tool '{tool_name}' configured but not found")
 
-    # Add MCP tools that are always_available
+    # Add MCP tools that are available_to_subagent
     if mcp_tools:
         for mcp_tool in mcp_tools:
-            if getattr(mcp_tool, "always_available", False):
+            # Support both old and new field names during transition
+            if getattr(mcp_tool, "available_to_subagent", getattr(mcp_tool, "always_available", False)):
                 persistent.append(mcp_tool)
 
-    LOGGER.info(f"  - Persistent tools: {[t.name for t in persistent]}")
+    LOGGER.info(f"  - Subagent-available tools: {[t.name for t in persistent]}")
 
     return registry, persistent
 
@@ -129,6 +130,8 @@ async def build_application(
     mcp_tools: Optional[List] = None,
 ):
     """Return a compiled LangGraph application instance.
+
+    print("[DEBUG] build_application() started")
 
     Args:
         model_resolver: Optional custom model resolver

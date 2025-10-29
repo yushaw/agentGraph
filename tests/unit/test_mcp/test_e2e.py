@@ -151,7 +151,7 @@ async def test_mcp_tool_discovery(test_mcp_config):
         print(f"      - {tool.name}: {tool.description}")
         print(f"        Server: {tool.server_id}")
         print(f"        Original name: {tool.original_tool_name}")
-        print(f"        Always available: {tool.always_available}")
+        print(f"        Always available: {tool.available_to_subagent}")
 
     # Verify tool properties
     assert len(mcp_tools) == 3
@@ -160,17 +160,17 @@ async def test_mcp_tool_discovery(test_mcp_config):
     echo = next(t for t in mcp_tools if t.name == "mcp_echo")
     assert echo.server_id == "test_stdio"
     assert echo.original_tool_name == "echo"
-    assert not echo.always_available
+    assert not echo.available_to_subagent
 
     add = next(t for t in mcp_tools if t.name == "mcp_add")
     assert add.server_id == "test_stdio"
     assert add.original_tool_name == "add"
-    assert not add.always_available
+    assert not add.available_to_subagent
 
     time = next(t for t in mcp_tools if t.name == "mcp_time")
     assert time.server_id == "test_stdio"
     assert time.original_tool_name == "get_time"
-    assert time.always_available  # Configured as always_available
+    assert time.available_to_subagent  # Configured as available_to_subagent
 
     print("\n      ✓ All tools verified")
     print("\n=== Tool Discovery Test Completed ===\n")

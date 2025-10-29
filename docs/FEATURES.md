@@ -2287,7 +2287,7 @@ servers:
     tools:
       read_file:
         enabled: true           # 启用此工具
-        always_available: false # 不自动加载到所有 agent
+        available_to_subagent: false # 不自动加载到所有 agent
         alias: "fs_read"        # 自定义名称
         description: "从允许的目录读取文件内容"
 
@@ -2399,7 +2399,7 @@ async def build_application(
         for mcp_tool in mcp_tools:
             tool_registry.register_tool(
                 tool=mcp_tool,
-                always_available=mcp_tool.always_available
+                available_to_subagent=mcp_tool.available_to_subagent
             )
 
     # 5. 构建 Graph

@@ -200,7 +200,7 @@ vim ../CHANGELOG.md
 optional:
   my_tool:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     category: "utility"
 \`\`\`
 

@@ -48,19 +48,19 @@ def test_mcp_config(test_server_path):
                 "tools": {
                     "echo": {
                         "enabled": True,
-                        "always_available": False,
+                        "available_to_subagent": False,
                         "alias": "mcp_echo",
                         "description": "Echo back a message"
                     },
                     "add": {
                         "enabled": True,
-                        "always_available": False,
+                        "available_to_subagent": False,
                         "alias": "mcp_add",
                         "description": "Add two numbers"
                     },
                     "get_time": {
                         "enabled": True,
-                        "always_available": True,  # Test always_available
+                        "available_to_subagent": True,  # Test available_to_subagent
                         "alias": "mcp_time",
                         "description": "Get current server time"
                     }

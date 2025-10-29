@@ -519,7 +519,7 @@ core:
 optional:
   http_fetch:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     category: "network"
     tags: ["network", "read"]
 
@@ -548,16 +548,16 @@ class ToolConfig:
 
         return enabled
 
-    def is_always_available(self, tool_name: str) -> bool:
+    def is_available_to_subagent(self, tool_name: str) -> bool:
         """检查工具是否应该在所有上下文中可用"""
         meta = self._find_tool_config(tool_name)
-        return meta.get("always_available", False)
+        return meta.get("available_to_subagent", False)
 ```
 
 **设计考量**:
 - 配置驱动，无需修改代码
 - `core` vs `optional` 区分系统工具和可选工具
-- `always_available` 控制全局可见性
+- `available_to_subagent` 控制全局可见性
 
 ---
 
@@ -575,7 +575,7 @@ class ToolMeta:
     category: str
     tags: List[str]
     description: str
-    always_available: bool = False
+    available_to_subagent: bool = False
     dependencies: List[str] = field(default_factory=list)
 ```
 
@@ -611,7 +611,7 @@ for meta in all_metadata:
 optional:
   todo_write:
     enabled: true
-    always_available: true  # 在所有上下文中可见
+    available_to_subagent: true  # 在所有上下文中可见
 ```
 
 **实现**:
@@ -620,7 +620,7 @@ optional:
 # generalAgent/runtime/app.py:89-99
 persistent = []
 for tool_name in enabled_tools:
-    if tool_config.is_always_available(tool_name):
+    if tool_config.is_available_to_subagent(tool_name):
         try:
             persistent.append(registry.get_tool(tool_name))
         except KeyError:
@@ -1015,19 +1015,19 @@ core: []  # 默认为空
 optional:
   pdf:
     enabled: false                           # 显示在目录中并在启动时加载
-    always_available: false                  # 在所有会话中保持加载状态
+    available_to_subagent: false                  # 在所有会话中保持加载状态
     description: "PDF 处理和表单填写"
     auto_load_on_file_types: ["pdf"]        # 上传 .pdf 文件时自动加载
 
   docx:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "DOCX 文件处理"
     auto_load_on_file_types: ["docx"]
 
   xlsx:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "Excel 文件处理"
     auto_load_on_file_types: ["xlsx", "xls"]
 ```
@@ -1039,7 +1039,7 @@ optional:
   - `false`: 技能在目录中隐藏，只能通过 @mention 或文件上传加载
   - **使用场景**: 隐藏实验性或很少使用的技能以减少 prompt 噪音
 
-- **`always_available`**: 在所有会话中保持技能加载状态（不推荐）
+- **`available_to_subagent`**: 在所有会话中保持技能加载状态（不推荐）
   - 默认: `false`（技能按会话加载）
 
 - **`description`**: 目录中显示的人类可读描述

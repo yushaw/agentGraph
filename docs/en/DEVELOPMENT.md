@@ -472,14 +472,14 @@ Edit `generalAgent/config/tools.yaml`:
 optional:
   calculate_sum:
     enabled: true                      # Load at startup
-    always_available: false            # Not globally visible (default)
+    available_to_subagent: false            # Not globally visible (default)
     category: "compute"                # Tool category
     tags: ["math", "calculation"]      # Searchable tags
     description: "Sum a list of numbers"
 
   calculate_average:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     category: "compute"
     tags: ["math", "calculation", "statistics"]
     description: "Calculate average of numbers"
@@ -518,14 +518,14 @@ core:
 optional:
   http_fetch:
     enabled: true                      # Load at startup
-    always_available: false            # Not globally visible
+    available_to_subagent: false            # Not globally visible
     category: "network"
     tags: ["network", "read"]
     description: "Fetch web page content"
 
   run_bash_command:
     enabled: false                     # Not loaded at startup
-    always_available: false
+    available_to_subagent: false
     category: "system"
     tags: ["system", "dangerous"]
     description: "Execute bash commands"
@@ -534,7 +534,7 @@ optional:
 **Configuration Options**:
 
 - `enabled: true/false` - Whether to load at startup
-- `always_available: true/false` - Whether globally visible (use sparingly)
+- `available_to_subagent: true/false` - Whether globally visible (use sparingly)
 - `category` - Tool category for organization
 - `tags` - Searchable tags
 - `description` - Human-readable description
@@ -546,7 +546,7 @@ optional:
 | `core: tool` | Always loaded, always visible |
 | `enabled: true` | Loaded at startup, visible by default |
 | `enabled: false` | Not loaded, but available via @mention |
-| `always_available: true` | Added to all agent contexts (use sparingly) |
+| `available_to_subagent: true` | Added to all agent contexts (use sparingly) |
 
 ### 2.4 Tool Metadata
 
@@ -559,7 +559,7 @@ class ToolMeta:
     category: str                       # Category (e.g., "file", "network")
     tags: list[str]                     # Tags (e.g., ["read", "file"])
     description: str                    # Human-readable description
-    always_available: bool = False      # Global visibility flag
+    available_to_subagent: bool = False      # Global visibility flag
 ```
 
 **Usage**:
@@ -576,7 +576,7 @@ registry.add_metadata(ToolMeta(
     category="file",
     tags=["read", "file", "workspace"],
     description="Read file from workspace",
-    always_available=False,
+    available_to_subagent=False,
 ))
 
 # Query metadata
@@ -1073,7 +1073,7 @@ Edit `generalAgent/config/skills.yaml`:
 optional:
   my-skill:
     enabled: true                           # Show in catalog
-    always_available: false
+    available_to_subagent: false
     description: "My custom skill for data processing"
     auto_load_on_file_types: ["txt", "csv"]  # Auto-load for these file types
 ```
@@ -1366,13 +1366,13 @@ core: []  # Empty by default
 optional:
   pdf:
     enabled: false                           # Show in catalog?
-    always_available: false                  # Keep loaded across all sessions?
+    available_to_subagent: false                  # Keep loaded across all sessions?
     description: "PDF processing and form filling"
     auto_load_on_file_types: ["pdf"]        # Auto-load when .pdf uploaded
 
   my-skill:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "My custom skill"
     auto_load_on_file_types: ["txt", "csv"]
 
@@ -1385,7 +1385,7 @@ directories:
 
 - `enabled: true` - Show in catalog and load at startup
 - `enabled: false` - Hide from catalog, only load via @mention or file upload
-- `always_available: true` - Keep loaded across all sessions (not recommended)
+- `available_to_subagent: true` - Keep loaded across all sessions (not recommended)
 - `auto_load_on_file_types` - File extensions that trigger auto-load
 
 **Behavior**:

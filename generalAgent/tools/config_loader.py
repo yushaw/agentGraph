@@ -96,16 +96,16 @@ class ToolConfig:
         optional = set(self.get_enabled_optional_tools())
         return core | optional
 
-    def is_always_available(self, tool_name: str) -> bool:
-        """Check if a tool should always be available in tool list.
+    def is_available_to_subagent(self, tool_name: str) -> bool:
+        """Check if a tool should be available to subagent (delegated agent).
 
         Args:
             tool_name: Name of the tool
 
         Returns:
-            True if tool should always be available, False otherwise
+            True if tool should be available to subagent, False otherwise
         """
-        # Core tools are always available
+        # Core tools are available to subagent by default
         if tool_name in self.get_core_tools():
             return True
 
@@ -114,7 +114,8 @@ class ToolConfig:
         if tool_name in optional:
             settings = optional[tool_name]
             if isinstance(settings, dict):
-                return settings.get("always_available", False)
+                # Support both old and new field names during transition
+                return settings.get("available_to_subagent", settings.get("always_available", False))
 
         return False
 
@@ -167,7 +168,7 @@ class ToolConfig:
                     name=tool_name,
                     risk=tool_config.get("category", "unknown"),
                     tags=tool_config.get("tags", []),
-                    always_available=True,  # Core tools are always available
+                    available_to_subagent=True,  # Core tools are available to subagent
                 )
 
         # Check optional tools
@@ -179,7 +180,7 @@ class ToolConfig:
                     name=tool_name,
                     risk=tool_config.get("category", "unknown"),
                     tags=tool_config.get("tags", []),
-                    always_available=tool_config.get("always_available", False),
+                    available_to_subagent=tool_config.get("available_to_subagent", tool_config.get("always_available", False)),
                 )
 
         return None
@@ -201,7 +202,7 @@ class ToolConfig:
                         name=tool_name,
                         risk=tool_config.get("category", "unknown"),
                         tags=tool_config.get("tags", []),
-                        always_available=True,
+                        available_to_subagent=True,
                     ))
 
         # Add enabled optional tools metadata
@@ -212,7 +213,7 @@ class ToolConfig:
                     name=tool_name,
                     risk=tool_config.get("category", "unknown"),
                     tags=tool_config.get("tags", []),
-                    always_available=tool_config.get("always_available", False),
+                    available_to_subagent=tool_config.get("available_to_subagent", tool_config.get("always_available", False)),
                 ))
 
         return metadata

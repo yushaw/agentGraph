@@ -357,6 +357,24 @@ def build_planner_node(
 
         prompt_messages = [SystemMessage(content=base_prompt), *message_history]
 
+        # ========== Store parent state for delegate_task inheritance ==========
+        # If delegate_task is in visible_tools, store current state for subagent inheritance
+        if any(t.name == "delegate_task" for t in visible_tools):
+            from generalAgent.tools.builtin.delegate_task import set_parent_state
+            thread_id = state.get("thread_id")
+            if thread_id:
+                # Store minimal state needed for inheritance
+                inheritance_state = {
+                    "mentioned_agents": state.get("mentioned_agents", []),
+                    "active_skill": state.get("active_skill"),
+                    "workspace_path": state.get("workspace_path"),
+                    "uploaded_files": state.get("uploaded_files", []),
+                    "context_id": state.get("context_id", "main"),
+                    "user_id": state.get("user_id"),
+                }
+                set_parent_state(thread_id, inheritance_state)
+                LOGGER.info(f"  - Stored parent state for potential delegation (thread_id={thread_id})")
+
         # ========== Invoke planner ==========
         # Invoke planner with model selection
 

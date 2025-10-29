@@ -70,56 +70,56 @@ optional:
 
   fetch_web:
     enabled: true
-    always_available: false
+    available_to_subagent: true
     category: "network"
     tags: ["network", "read", "web"]
     description: "Fetch web pages and convert to markdown using Jina Reader"
 
   search_web:
     enabled: true
-    always_available: false
+    available_to_subagent: true
     category: "network"
     tags: ["network", "search", "web", "google"]
     description: "Search the web using Google Custom Search API (returns title + snippet)"
-  
+
   http_fetch:
-    enabled: true
-    always_available: false
+    enabled: false
+    available_to_subagent: false
     category: "network"
     tags: ["network", "read"]
     description: "HTTP fetching (stub)"
 
   web_search:
     enabled: false
-    always_available: false
+    available_to_subagent: false
     category: "network"
     tags: ["network", "search", "web", "jina"]
     description: "Search the web with full content using Jina Search (alternative, slower but more detailed)"
 
   compact_context:
     enabled: false
-    always_available: false
+    available_to_subagent: false
     category: "meta"
     tags: ["meta", "context", "compression"]
     description: "Compress conversation context to save tokens (dynamically loaded when needed)"
 
   extract_links:
     enabled: false
-    always_available: false
+    available_to_subagent: false
     category: "read"
     tags: ["read", "parse"]
     description: "Link extraction (stub)"
 
   ask_vision:
     enabled: false
-    always_available: false
+    available_to_subagent: false
     category: "read"
     tags: ["vision", "read"]
     description: "Vision perception (stub)"
 
   call_external_agent:
     enabled: false
-    always_available: false
+    available_to_subagent: false
     category: "network"
     tags: ["network", "agent"]
     description: "Call external agents"

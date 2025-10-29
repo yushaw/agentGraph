@@ -5,15 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any, Optional, Annotated
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import tool
+from langchain_core.tools import tool, InjectedToolArg
 from langgraph.types import Command
 
-# Context variable to store app graph (set by runtime)
-_app_graph_ctx: ContextVar[Optional[Any]] = ContextVar("app_graph", default=None)
+# Module-level variables to store app graph and parent state (set by runtime/planner)
+# Changed from ContextVar to simple module variable to avoid async context issues
+_app_graph: Optional[Any] = None
+_parent_state_store: dict[str, dict] = {}  # {thread_id: parent_state}
 
 
 def set_app_graph(app_graph):
@@ -21,15 +22,29 @@ def set_app_graph(app_graph):
 
     Called by runtime after graph is built.
     """
-    _app_graph_ctx.set(app_graph)
+    global _app_graph
+    _app_graph = app_graph
+
+
+def set_parent_state(thread_id: str, state: dict):
+    """Store parent state for subagent inheritance.
+
+    Called by planner before tool execution.
+    """
+    global _parent_state_store
+    _parent_state_store[thread_id] = state
 
 
 @tool
-async def delegate_task(task: str, max_loops: int = 50) -> str:
+async def delegate_task(
+    task: str,
+    max_loops: int = 50,
+    config: Annotated[dict, InjectedToolArg] = None,
+) -> str:
     """将独立子任务委派给专用子 agent 执行（适合需要多轮迭代的任务）
 
-    ⚠️ **重要：子 agent 在独立上下文中运行**
-    - 子 agent 看不到主对话历史
+    ⚠️ **重要：子 agent 继承主 agent 的工具和技能**
+    - 子 agent 看不到主对话历史（独立上下文）
 
     **何时使用：**
     - 需要多轮工具调用的复杂子任务（深度研究、反复尝试、大文档分析）
@@ -61,36 +76,52 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
                       "返回：结构化 JSON")
     """
     try:
-        # Get app graph from context
-        app_graph = _app_graph_ctx.get()
+        # Get app graph from module variable
+        app_graph = _app_graph
         if app_graph is None:
             return json.dumps({
                 "ok": False,
                 "error": "Application graph not initialized",
             }, ensure_ascii=False)
 
+        # Get parent state from config (injected by LangGraph)
+        parent_state = {}
+        parent_thread_id = None
+        if config:
+            configurable = config.get("configurable", {})
+            parent_thread_id = configurable.get("thread_id")
+            if parent_thread_id and parent_thread_id in _parent_state_store:
+                parent_state = _parent_state_store[parent_thread_id]
+
         # Generate unique context ID
         context_id = f"subagent-{uuid.uuid4().hex[:8]}"
+
+        # Inherit from parent state
+        parent_mentioned_agents = parent_state.get("mentioned_agents", [])
+        parent_active_skill = parent_state.get("active_skill")
+        parent_workspace = parent_state.get("workspace_path")
+        parent_uploaded_files = parent_state.get("uploaded_files", [])
 
         # Create independent state for delegated agent
         delegated_state = {
             "messages": [HumanMessage(content=task)],
             "images": [],
-            "active_skill": None,
+            "active_skill": parent_active_skill,  # Inherit active skill
             "allowed_tools": [],
-            "mentioned_agents": [],
-            "new_mentioned_agents": [],  # Current turn's @mentions
+            "mentioned_agents": list(parent_mentioned_agents),  # Inherit @mentions
+            "new_mentioned_agents": [],  # No new mentions initially
             "persistent_tools": [],
             "model_pref": None,
             "todos": [],
             "context_id": context_id,
-            "parent_context": "main",  # TODO: Get from current context
+            "parent_context": parent_state.get("context_id", "main"),
             "loops": 0,
             "max_loops": max_loops,
             "thread_id": context_id,  # Use context_id as thread_id for isolation
-            "user_id": None,
-            "uploaded_files": [],  # All uploaded files (historical)
-            "new_uploaded_files": [],  # Current turn's uploaded files
+            "user_id": parent_state.get("user_id"),
+            "workspace_path": parent_workspace,  # Inherit workspace
+            "uploaded_files": list(parent_uploaded_files),  # Inherit uploaded files
+            "new_uploaded_files": [],  # No new uploads initially
         }
 
         # Run delegated agent in isolated context with streaming
@@ -270,4 +301,4 @@ async def delegate_task(task: str, max_loops: int = 50) -> str:
         }, ensure_ascii=False)
 
 
-__all__ = ["delegate_task"]
+__all__ = ["delegate_task", "set_parent_state"]

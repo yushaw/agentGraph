@@ -15,7 +15,7 @@ class ToolMeta:
     name: str
     risk: str
     tags: List[str]
-    always_available: bool = False
+    available_to_subagent: bool = False  # Whether subagent can use this tool
 
 
 class ToolRegistry:
@@ -55,7 +55,7 @@ class ToolRegistry:
         return list(self._tools.values())
 
     def list_global_tools(self) -> List[BaseTool]:
-        return [self._tools[item.name] for item in self._meta.values() if item.always_available]
+        return [self._tools[item.name] for item in self._meta.values() if item.available_to_subagent]
 
     def allowed_tools(self, allowlist: Optional[Iterable[str]]) -> List[BaseTool]:
         if not allowlist:

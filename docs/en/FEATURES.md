@@ -2109,7 +2109,7 @@ servers:
     tools:
       read_file:
         enabled: true           # Enable this tool
-        always_available: false # Don't auto-load to all agents
+        available_to_subagent: false # Don't auto-load to all agents
         alias: "fs_read"        # Custom name
         description: "Read file contents from allowed directory"
 
@@ -2221,7 +2221,7 @@ async def build_application(
         for mcp_tool in mcp_tools:
             tool_registry.register_tool(
                 tool=mcp_tool,
-                always_available=mcp_tool.always_available
+                available_to_subagent=mcp_tool.available_to_subagent
             )
 
     # 5. Build Graph

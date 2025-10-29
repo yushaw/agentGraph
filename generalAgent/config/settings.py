@@ -196,8 +196,8 @@ class GovernanceSettings(BaseSettings):
     """
 
     auto_approve_writes: bool = Field(default=False, alias="AUTO_APPROVE_WRITES")
-    max_loops: int = Field(default=200, ge=1, le=500)
-    max_message_history: int = Field(default=200, ge=10, le=500, alias="MAX_MESSAGE_HISTORY")
+    max_loops: int = Field(default=500, ge=1, le=500)
+    max_message_history: int = Field(default=500, ge=10, le=500, alias="MAX_MESSAGE_HISTORY")
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -260,8 +260,8 @@ class ContextManagementSettings(BaseSettings):
 
     # 保留最近消息的策略（混合模式：Token 比例 + 消息数）
     # 比例相对于模型 context window，例如 0.15 表示保留 15% 的 context window
-    keep_recent_ratio: float = Field(default=0.15, ge=0.05, le=0.5, alias="CONTEXT_KEEP_RECENT_RATIO")
-    keep_recent_messages: int = Field(default=8, ge=5, le=50, alias="CONTEXT_KEEP_RECENT_MESSAGES")
+    keep_recent_ratio: float = Field(default=0.2, ge=0.05, le=0.5, alias="CONTEXT_KEEP_RECENT_RATIO")
+    keep_recent_messages: int = Field(default=10, ge=5, le=50, alias="CONTEXT_KEEP_RECENT_MESSAGES")
 
     # 压缩触发条件
     min_messages_to_compress: int = Field(default=5, ge=5, le=100, alias="CONTEXT_MIN_MESSAGES_TO_COMPRESS")

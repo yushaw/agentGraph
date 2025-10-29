@@ -460,7 +460,57 @@ optional:
 **Tool behavior:**
 - `enabled: true` - Loaded at application startup
 - `enabled: false` - Available via on-demand loading when user @mentions it
-- `always_available: true` - Added to all agent contexts (use sparingly)
+- `available_to_subagent: true` - Tool is available to delegated subagents when inherited from main agent
+
+### Subagent Tool Inheritance
+
+When using `delegate_task` to create a subagent, the subagent automatically inherits:
+
+1. **@mentioned tools** - All tools that were @mentioned by the main agent
+2. **@mentioned skills** - The active skill from the main agent
+3. **Workspace** - Same workspace directory (shared file access)
+4. **Uploaded files** - All files uploaded in the session
+
+**Tool availability levels:**
+- **Core tools** (in `core:` section) - Always `available_to_subagent: true` by default
+- **Optional tools with `available_to_subagent: true`** - Available to subagent when main agent @mentions them
+- **Optional tools with `available_to_subagent: false`** - NOT inherited by subagent (even if main agent used them)
+
+**Example configuration:**
+```yaml
+optional:
+  fetch_web:
+    enabled: true
+    available_to_subagent: true  # Subagent can inherit this
+    category: "network"
+
+  search_web:
+    enabled: true
+    available_to_subagent: true  # Subagent can inherit this
+    category: "network"
+
+  compact_context:
+    enabled: false
+    available_to_subagent: false  # Subagent cannot inherit this
+    category: "meta"
+```
+
+**User workflow example:**
+```
+User> @fetch_web 帮我研究一下 Python 3.13 的新特性
+Agent> [Loads fetch_web tool, uses it to fetch content]
+       [Decides to delegate deep analysis]
+       [Calls delegate_task("分析 Python 3.13 新特性...")]
+
+Subagent> [Inherits fetch_web tool automatically]
+          [Can continue fetching web pages without re-@mentioning]
+          [Produces detailed analysis]
+```
+
+**Implementation details:**
+- Parent state stored in `delegate_task._parent_state_store` before tool execution (generalAgent/graph/nodes/planner.py:360-376)
+- Subagent retrieves parent state via `config` injection (generalAgent/tools/builtin/delegate_task.py:91-116)
+- Subagent inherits `mentioned_agents`, `active_skill`, `workspace_path`, `uploaded_files`
 
 ## Adding New Tools
 

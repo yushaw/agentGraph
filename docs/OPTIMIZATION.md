@@ -1897,7 +1897,7 @@ planner = build_planner_node(...)
 
 3. **工具管理**:
    - 不要在启动时加载所有工具
-   - 不要将所有工具设置为 `always_available: true`
+   - 不要将所有工具设置为 `available_to_subagent: true`
    - 不要跳过危险工具的 @提及
 
 4. **子代理**:

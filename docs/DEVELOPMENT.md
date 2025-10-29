@@ -472,14 +472,14 @@ __all__ = ["calculate_sum", "calculate_average"]
 optional:
   calculate_sum:
     enabled: true                      # 启动时加载
-    always_available: false            # 非全局可见（默认）
+    available_to_subagent: false            # 非全局可见（默认）
     category: "compute"                # 工具类别
     tags: ["math", "calculation"]      # 可搜索标签
     description: "对数字列表求和"
 
   calculate_average:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     category: "compute"
     tags: ["math", "calculation", "statistics"]
     description: "计算数字平均值"
@@ -518,14 +518,14 @@ core:
 optional:
   http_fetch:
     enabled: true                      # 启动时加载
-    always_available: false            # 非全局可见
+    available_to_subagent: false            # 非全局可见
     category: "network"
     tags: ["network", "read"]
     description: "获取网页内容"
 
   run_bash_command:
     enabled: false                     # 启动时不加载
-    always_available: false
+    available_to_subagent: false
     category: "system"
     tags: ["system", "dangerous"]
     description: "执行 bash 命令"
@@ -534,7 +534,7 @@ optional:
 **配置选项**：
 
 - `enabled: true/false` - 是否在启动时加载
-- `always_available: true/false` - 是否全局可见（谨慎使用）
+- `available_to_subagent: true/false` - 是否全局可见（谨慎使用）
 - `category` - 用于组织的工具类别
 - `tags` - 可搜索标签
 - `description` - 人类可读的描述
@@ -546,7 +546,7 @@ optional:
 | `core: tool` | 始终加载，始终可见 |
 | `enabled: true` | 启动时加载，默认可见 |
 | `enabled: false` | 不加载，但可通过 @提及使用 |
-| `always_available: true` | 添加到所有代理上下文（谨慎使用）|
+| `available_to_subagent: true` | 添加到所有代理上下文（谨慎使用）|
 
 ### 2.4 工具元数据
 
@@ -559,7 +559,7 @@ class ToolMeta:
     category: str                       # 类别（如 "file", "network"）
     tags: list[str]                     # 标签（如 ["read", "file"]）
     description: str                    # 人类可读描述
-    always_available: bool = False      # 全局可见性标志
+    available_to_subagent: bool = False      # 全局可见性标志
 ```
 
 **使用**：
@@ -576,7 +576,7 @@ registry.add_metadata(ToolMeta(
     category="file",
     tags=["read", "file", "workspace"],
     description="从工作区读取文件",
-    always_available=False,
+    available_to_subagent=False,
 ))
 
 # 查询元数据
@@ -1073,7 +1073,7 @@ numpy>=1.24.0
 optional:
   my-skill:
     enabled: true                           # 在目录中显示
-    always_available: false
+    available_to_subagent: false
     description: "用于数据处理的自定义技能"
     auto_load_on_file_types: ["txt", "csv"]  # 为这些文件类型自动加载
 ```
@@ -1366,13 +1366,13 @@ core: []  # 默认为空
 optional:
   pdf:
     enabled: false                           # 在目录中显示？
-    always_available: false                  # 在所有会话中保持加载？
+    available_to_subagent: false                  # 在所有会话中保持加载？
     description: "PDF 处理和表单填写"
     auto_load_on_file_types: ["pdf"]        # 上传 .pdf 时自动加载
 
   my-skill:
     enabled: true
-    always_available: false
+    available_to_subagent: false
     description: "我的自定义技能"
     auto_load_on_file_types: ["txt", "csv"]
 
@@ -1385,7 +1385,7 @@ directories:
 
 - `enabled: true` - 在目录中显示并在启动时加载
 - `enabled: false` - 从目录隐藏，只通过 @提及或文件上传加载
-- `always_available: true` - 在所有会话中保持加载（不推荐）
+- `available_to_subagent: true` - 在所有会话中保持加载（不推荐）
 - `auto_load_on_file_types` - 触发自动加载的文件扩展名
 
 **行为**：
