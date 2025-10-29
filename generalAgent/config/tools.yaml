@@ -59,24 +59,35 @@ core:
     description: "Ask user for input when additional information is needed"
 
   run_bash_command:
-    enabled: false
-    always_available: false
     category: "execution"
     tags: ["execute", "bash", "shell"]
     description: "Execute bash commands in workspace (dangerous, use carefully)"
 
+
+
+# Optional tools - Can be enabled/disabled
+optional:
+
   fetch_web:
+    enabled: true
+    always_available: false
     category: "network"
     tags: ["network", "read", "web"]
     description: "Fetch web pages and convert to markdown using Jina Reader"
 
   search_web:
+    enabled: true
+    always_available: false
     category: "network"
     tags: ["network", "search", "web", "google"]
     description: "Search the web using Google Custom Search API (returns title + snippet)"
-
-# Optional tools - Can be enabled/disabled
-optional:
+  
+  http_fetch:
+    enabled: true
+    always_available: false
+    category: "network"
+    tags: ["network", "read"]
+    description: "HTTP fetching (stub)"
 
   web_search:
     enabled: false
@@ -91,13 +102,6 @@ optional:
     category: "meta"
     tags: ["meta", "context", "compression"]
     description: "Compress conversation context to save tokens (dynamically loaded when needed)"
-
-  http_fetch:
-    enabled: true
-    always_available: false
-    category: "network"
-    tags: ["network", "read"]
-    description: "HTTP fetching (stub)"
 
   extract_links:
     enabled: false
