@@ -196,8 +196,8 @@ class GovernanceSettings(BaseSettings):
     """
 
     auto_approve_writes: bool = Field(default=False, alias="AUTO_APPROVE_WRITES")
-    max_loops: int = Field(default=100, ge=1, le=500)
-    max_message_history: int = Field(default=40, ge=10, le=100, alias="MAX_MESSAGE_HISTORY")
+    max_loops: int = Field(default=200, ge=1, le=500)
+    max_message_history: int = Field(default=200, ge=10, le=500, alias="MAX_MESSAGE_HISTORY")
 
     model_config = SettingsConfigDict(
         env_file=".env",

@@ -2,15 +2,30 @@
 
 import os
 import pytest
+from pydantic_settings import SettingsConfigDict
 from generalAgent.config.settings import get_settings, ModelRoutingSettings
 
 
 class TestMaxCompletionTokensConfig:
     """Test max_completion_tokens configuration loading and defaults."""
 
-    def test_default_fallback_values(self):
+    def test_default_fallback_values(self, monkeypatch):
         """Test that default fallback values are set correctly."""
-        settings = ModelRoutingSettings()
+        # Clear all existing MODEL_ environment variables
+        import os
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Set only required model fields
+        monkeypatch.setenv("MODEL_BASE", "test-model")
+        monkeypatch.setenv("MODEL_REASON", "test-model")
+        monkeypatch.setenv("MODEL_VISION", "test-model")
+        monkeypatch.setenv("MODEL_CODE", "test-model")
+        monkeypatch.setenv("MODEL_CHAT", "test-model")
+
+        # Don't set max_completion_tokens, should use defaults
+        settings = ModelRoutingSettings(_env_file=None)
 
         assert settings.base_max_completion_tokens == 2048
         assert settings.reason_max_completion_tokens == 2048
@@ -26,7 +41,7 @@ class TestMaxCompletionTokensConfig:
         monkeypatch.setenv("MODEL_CODE_MAX_COMPLETION_TOKENS", "8192")
         monkeypatch.setenv("MODEL_CHAT_MAX_COMPLETION_TOKENS", "4096")
 
-        settings = ModelRoutingSettings()
+        settings = ModelRoutingSettings(_env_file=None)
 
         assert settings.base_max_completion_tokens == 4096
         assert settings.reason_max_completion_tokens == 8192
@@ -36,13 +51,27 @@ class TestMaxCompletionTokensConfig:
 
     def test_backward_compatibility_old_names(self, monkeypatch):
         """Test backward compatibility with old MAX_TOKENS naming."""
+        # Clear all existing MODEL_ environment variables
+        import os
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Set required model fields
+        monkeypatch.setenv("MODEL_BASE", "test-model")
+        monkeypatch.setenv("MODEL_REASON", "test-model")
+        monkeypatch.setenv("MODEL_VISION", "test-model")
+        monkeypatch.setenv("MODEL_CODE", "test-model")
+        monkeypatch.setenv("MODEL_CHAT", "test-model")
+
+        # Test old MAX_TOKENS naming (backward compatibility)
         monkeypatch.setenv("MODEL_BASIC_MAX_TOKENS", "3072")
         monkeypatch.setenv("MODEL_REASONING_MAX_TOKENS", "6144")
         monkeypatch.setenv("MODEL_MULTIMODAL_MAX_TOKENS", "3072")
         monkeypatch.setenv("MODEL_CODE_MAX_TOKENS", "6144")
         monkeypatch.setenv("MODEL_CHAT_MAX_TOKENS", "3072")
 
-        settings = ModelRoutingSettings()
+        settings = ModelRoutingSettings(_env_file=None)
 
         # Old names should still work via AliasChoices
         assert settings.base_max_completion_tokens == 3072
@@ -51,22 +80,41 @@ class TestMaxCompletionTokensConfig:
         assert settings.code_max_completion_tokens == 6144
         assert settings.chat_max_completion_tokens == 3072
 
-    def test_validation_bounds(self):
-        """Test that values are validated within allowed range (512-16384)."""
-        # Test lower bound
-        with pytest.raises(ValueError):
-            ModelRoutingSettings(base_max_completion_tokens=256)  # Too low
+    def test_validation_bounds(self, monkeypatch):
+        """Test that values are validated within allowed range (512-204800)."""
+        from pydantic import ValidationError
+
+        # Clear all existing MODEL_ environment variables
+        import os
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Set required model fields
+        monkeypatch.setenv("MODEL_BASE", "test-model")
+        monkeypatch.setenv("MODEL_REASON", "test-model")
+        monkeypatch.setenv("MODEL_VISION", "test-model")
+        monkeypatch.setenv("MODEL_CODE", "test-model")
+        monkeypatch.setenv("MODEL_CHAT", "test-model")
+
+        # Test lower bound - use environment variable to trigger validation
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "256")  # Too low
+        with pytest.raises(ValidationError):
+            ModelRoutingSettings(_env_file=None)
 
         # Test upper bound
-        with pytest.raises(ValueError):
-            ModelRoutingSettings(base_max_completion_tokens=20000)  # Too high
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "300000")  # Too high
+        with pytest.raises(ValidationError):
+            ModelRoutingSettings(_env_file=None)
 
         # Test valid values
-        settings = ModelRoutingSettings(base_max_completion_tokens=512)
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "512")
+        settings = ModelRoutingSettings(_env_file=None)
         assert settings.base_max_completion_tokens == 512
 
-        settings = ModelRoutingSettings(base_max_completion_tokens=16384)
-        assert settings.base_max_completion_tokens == 16384
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "204800")
+        settings = ModelRoutingSettings(_env_file=None)
+        assert settings.base_max_completion_tokens == 204800
 
     def test_model_resolver_receives_config(self):
         """Test that model_resolver receives max_completion_tokens from config."""
@@ -80,14 +128,14 @@ class TestMaxCompletionTokensConfig:
         for model_slot in ["base", "reason", "vision", "code", "chat"]:
             assert "max_completion_tokens" in configs[model_slot]
             assert isinstance(configs[model_slot]["max_completion_tokens"], int)
-            assert 512 <= configs[model_slot]["max_completion_tokens"] <= 16384
+            assert 512 <= configs[model_slot]["max_completion_tokens"] <= 204800
 
     def test_context_window_vs_max_completion_tokens_distinction(self, monkeypatch):
         """Test that context_window and max_completion_tokens are distinct."""
         monkeypatch.setenv("MODEL_CHAT_CONTEXT_WINDOW", "256000")
         monkeypatch.setenv("MODEL_CHAT_MAX_COMPLETION_TOKENS", "4096")
 
-        settings = ModelRoutingSettings()
+        settings = ModelRoutingSettings(_env_file=None)
 
         # context_window is total capacity (input + output)
         assert settings.chat_context_window == 256000

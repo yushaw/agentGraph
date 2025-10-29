@@ -124,7 +124,8 @@ class TestFinishReasonDetection:
             tool_calls=[
                 {
                     "name": "write_file",
-                    "args": {"path": "test.txt", "content": "Complete content"}
+                    "args": {"path": "test.txt", "content": "Complete content"},
+                    "id": "call_valid123"  # Required by LangChain
                 }
             ]
         )
@@ -185,33 +186,60 @@ class TestMaxTokensConfiguration:
         assert kwargs["model"] == "test-model"
         assert kwargs["api_key"] == "test-key"
 
-    def test_per_model_max_tokens_config(self):
+    def test_per_model_max_tokens_config(self, monkeypatch):
         """Test that each model can have different max_tokens."""
         from generalAgent.config.settings import ModelRoutingSettings
+        import os
 
-        # Simulate different configs
-        settings = ModelRoutingSettings(
-            base_max_completion_tokens=4096,
-            reason_max_completion_tokens=8192,
-            chat_max_completion_tokens=4096
-        )
+        # Clear all existing MODEL_ environment variables
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Set required model fields
+        monkeypatch.setenv("MODEL_BASE", "test-model")
+        monkeypatch.setenv("MODEL_REASON", "test-model")
+        monkeypatch.setenv("MODEL_VISION", "test-model")
+        monkeypatch.setenv("MODEL_CODE", "test-model")
+        monkeypatch.setenv("MODEL_CHAT", "test-model")
+
+        # Set different max_completion_tokens for different models
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "4096")
+        monkeypatch.setenv("MODEL_REASON_MAX_COMPLETION_TOKENS", "8192")
+        monkeypatch.setenv("MODEL_CHAT_MAX_COMPLETION_TOKENS", "4096")
+
+        settings = ModelRoutingSettings(_env_file=None)
 
         assert settings.base_max_completion_tokens == 4096
         assert settings.reason_max_completion_tokens == 8192
         assert settings.chat_max_completion_tokens == 4096
 
-    def test_reasoning_models_get_higher_limits(self):
+    def test_reasoning_models_get_higher_limits(self, monkeypatch):
         """Test that reasoning models are configured with higher max_tokens."""
         from generalAgent.runtime.model_resolver import resolve_model_configs
         from generalAgent.config.settings import Settings, ModelRoutingSettings
         from unittest.mock import Mock
+        import os
+
+        # Clear all existing MODEL_ environment variables
+        for key in list(os.environ.keys()):
+            if key.startswith("MODEL_"):
+                monkeypatch.delenv(key, raising=False)
+
+        # Set required model fields
+        monkeypatch.setenv("MODEL_BASE", "test-model")
+        monkeypatch.setenv("MODEL_REASON", "test-model")
+        monkeypatch.setenv("MODEL_VISION", "test-model")
+        monkeypatch.setenv("MODEL_CODE", "test-model")
+        monkeypatch.setenv("MODEL_CHAT", "test-model")
+
+        # Set different max_completion_tokens
+        monkeypatch.setenv("MODEL_BASE_MAX_COMPLETION_TOKENS", "4096")
+        monkeypatch.setenv("MODEL_REASON_MAX_COMPLETION_TOKENS", "8192")
 
         # Mock settings with reasoning model having higher limit
         mock_settings = Mock(spec=Settings)
-        mock_settings.models = ModelRoutingSettings(
-            base_max_completion_tokens=4096,
-            reason_max_completion_tokens=8192
-        )
+        mock_settings.models = ModelRoutingSettings(_env_file=None)
 
         # Get configs
         configs = resolve_model_configs(mock_settings)
