@@ -50,7 +50,8 @@ class GeneralAgentCLI(BaseCLI):
         skill_registry,
         tool_registry,
         skill_config,
-        logger
+        logger,
+        settings=None
     ):
         """Initialize GeneralAgent CLI.
 
@@ -61,6 +62,7 @@ class GeneralAgentCLI(BaseCLI):
             tool_registry: Tool registry for mention classification
             skill_config: Skill configuration loader
             logger: Application logger
+            settings: Application settings (optional, will load from get_settings() if not provided)
         """
         super().__init__(session_manager)
         self.app = app
@@ -68,6 +70,12 @@ class GeneralAgentCLI(BaseCLI):
         self.tool_registry = tool_registry
         self.skill_config = skill_config
         self.logger = logger
+
+        # Load settings for max_loops and recursion_limit
+        if settings is None:
+            from generalAgent.config import get_settings
+            settings = get_settings()
+        self.settings = settings
 
         # Add custom command handler
         self._command_handlers["/clean"] = self._handle_clean
@@ -241,8 +249,11 @@ class GeneralAgentCLI(BaseCLI):
                 os.environ["AGENT_WORKSPACE_PATH"] = workspace_path
 
             # Configure LangGraph execution
+            # Use max_loops * 3 to account for: agent + tools + finalize/summarization nodes
+            max_loops = state.get("max_loops", self.settings.governance.max_loops)
+            recursion_limit = max_loops * 3
             config = {
-                "recursion_limit": 50,
+                "recursion_limit": recursion_limit,
                 "configurable": {"thread_id": thread_id}
             }
 

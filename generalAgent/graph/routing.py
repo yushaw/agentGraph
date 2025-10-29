@@ -25,7 +25,7 @@ def agent_route(state: AppState) -> Literal["tools", "summarization", "finalize"
         "finalize": No tool calls (LLM finished) or loop limit reached
     """
     loops = state.get("loops", 0)
-    max_loops = state.get("max_loops", 42)
+    max_loops = state.get("max_loops", 500)
 
     # Check loop limit first
     if loops >= max_loops:
