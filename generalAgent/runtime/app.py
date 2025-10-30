@@ -23,6 +23,8 @@ from generalAgent.tools import (
 )
 from generalAgent.tools.scanner import scan_multiple_directories
 from generalAgent.tools.config_loader import load_tool_config
+from generalAgent.agents import scan_agents_from_config, AgentRegistry
+from generalAgent.tools.builtin.call_agent import set_agent_registry
 from .model_resolver import build_model_resolver, resolve_model_configs
 
 LOGGER = logging.getLogger(__name__)
@@ -123,6 +125,29 @@ def _create_tool_registry(skill_registry: SkillRegistry, mcp_tools: Optional[Lis
     return registry, persistent
 
 
+def _create_agent_registry() -> AgentRegistry:
+    """Create agent registry using scanner and configuration.
+
+    Returns:
+        AgentRegistry instance
+    """
+    LOGGER.info("Initializing Agent Registry...")
+    agent_registry = scan_agents_from_config()
+
+    # Output statistics
+    stats = agent_registry.get_stats()
+    LOGGER.info(
+        f"  - Agent Registry initialized: {stats['discovered']} discovered, "
+        f"{stats['enabled']} enabled, {stats['available_to_subagent']} available to subagent"
+    )
+
+    # List enabled agents
+    for card in agent_registry.list_enabled():
+        LOGGER.info(f"    ✓ Enabled: {card.id} ({card.name}) - {len(card.skills)} skills")
+
+    return agent_registry
+
+
 async def build_application(
     *,
     model_resolver: Optional[ModelResolver] = None,
@@ -139,7 +164,7 @@ async def build_application(
         mcp_tools: Optional list of MCP tools to register
 
     Returns:
-        (app, initial_state_factory, skill_registry, tool_registry, skill_config) tuple
+        (app, initial_state_factory, skill_registry, tool_registry, skill_config, agent_registry) tuple
     """
 
     settings = get_settings()
@@ -159,6 +184,27 @@ async def build_application(
     LOGGER.info(f"Skill config loaded: {len(skill_config.get_enabled_skills())} enabled skills")
 
     tool_registry, persistent_global_tools = _create_tool_registry(skill_registry, mcp_tools)
+
+    # Create agent registry
+    agent_registry = _create_agent_registry()
+
+    # Generate and register handoff tools (LangGraph handoff pattern)
+    if agent_registry:
+        from generalAgent.agents.handoff_tools import create_agent_handoff_tools
+
+        handoff_tools = create_agent_handoff_tools(agent_registry)
+        LOGGER.info(f"Generated {len(handoff_tools)} handoff tools")
+
+        # Register handoff tools as core tools (always available)
+        for tool in handoff_tools:
+            tool_registry.register_discovered(tool)
+            # Enable immediately (core tool)
+            tool_registry._tools[tool.name] = tool
+            LOGGER.info(f"Registered handoff tool: {tool.name}")
+
+    # Inject agent_registry into call_agent tool (backward compatibility)
+    set_agent_registry(agent_registry)
+    LOGGER.info("Agent Registry injected into call_agent tool")
 
     max_loops = settings.governance.max_loops
 
@@ -185,6 +231,7 @@ async def build_application(
         settings=settings,
         checkpointer=checkpointer,
         approval_checker=approval_checker,
+        agent_registry=agent_registry,  # NEW: Pass agent_registry to graph
     )
 
     # Set app graph for delegate_task tool
@@ -211,6 +258,9 @@ async def build_application(
             "workspace_path": None,  # Set by main.py when session starts
             "uploaded_files": [],  # All uploaded files (historical record)
             "new_uploaded_files": [],  # Current turn's uploaded files (for reminder)
+            "agent_call_stack": [],  # NEW: Current call stack (for loop detection)
+            "agent_call_history": [],  # NEW: Historical call record (for auditing)
+            "current_agent": "agent",  # NEW: Current active agent (for handoff routing)
         }
 
-    return app, initial_state, skill_registry, tool_registry, skill_config
+    return app, initial_state, skill_registry, tool_registry, skill_config, agent_registry

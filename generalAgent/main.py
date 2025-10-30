@@ -54,10 +54,11 @@ async def async_main():
             logger.info("No MCP configuration found, skipping MCP integration")
 
         # Build application (LangGraph + registries)
-        app, initial_state_factory, skill_registry, tool_registry, skill_config = await build_application(
+        app, initial_state_factory, skill_registry, tool_registry, skill_config, agent_registry = await build_application(
             mcp_tools=mcp_tools
         )
         logger.info("Application built successfully")
+        logger.info(f"  - Agent Registry: {agent_registry.get_stats() if agent_registry else 'disabled'}")
 
         # Initialize shared infrastructure
         session_store = SessionStore()

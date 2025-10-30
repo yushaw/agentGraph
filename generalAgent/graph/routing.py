@@ -62,16 +62,24 @@ def agent_route(state: AppState) -> Literal["tools", "summarization", "finalize"
     return decision
 
 
-def tools_route(state: AppState) -> Literal["agent"]:
-    """Route after tools node - always return to agent.
+def tools_route(state: AppState) -> str:
+    """Route after tools node - check for handoff or return to calling agent.
 
-    Simple loop: agent → tools → agent → ...
+    Handoff Pattern support:
+    - If a handoff tool returned Command(goto=...), route to that agent
+    - Otherwise, return to the calling agent (tracked via current_agent)
 
     Returns:
-        "agent": Always return to agent for next decision
+        str: Target node ("agent", "simple", "general", etc.)
     """
-    decision = "agent"
-    reason = "Tool execution complete, returning to agent"
+    # Check for handoff (Command.goto)
+    # When a handoff tool returns Command, the current_agent field is updated
+    current_agent = state.get("current_agent", "agent")
+
+    # Default: return to main agent or current agent
+    decision = current_agent if current_agent else "agent"
+    reason = f"Tool execution complete, returning to {decision}"
+
     log_routing_decision(LOGGER, "tools", decision, reason)
     return decision
 

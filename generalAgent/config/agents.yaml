@@ -1,0 +1,216 @@
+# Agents Configuration - Based on A2A Protocol Agent Card Standard
+# 参考：https://a2a-protocol.org/latest/topics/agent-discovery/
+#
+# ========== Handoff Pattern 使用说明 ==========
+#
+# 1. Agent 发现与调用
+#    - 系统会为每个 enabled agent 自动生成 transfer_to_{agent_id} 工具
+#    - 用户可以通过 @agent_id 触发（如 @simple）
+#    - LLM 也可以自主选择合适的 agent
+#
+# 2. Agent Catalog 显示模式
+#    - 默认：精简模式（仅显示 ID 和描述，节省 tokens）
+#    - @mention 时：动态显示详细技能信息（在 reminder 中）
+#
+# 3. 使用示例
+#    User> @simple 分析 uploads/script.py 的复杂度
+#    System> [加载 SimpleAgent，显示详细技能]
+#    LLM> [看到 transfer_to_simple 工具，调用]
+#    SimpleAgent> [执行任务，返回结果]
+#
+# 4. 配置说明
+#    - enabled: true - 启动时加载（出现在 catalog）
+#    - enabled: false - 不加载（需要 @mention 触发）
+#    - available_to_subagent: true - 子 agent 可以调用
+#
+# Global settings
+global:
+  enabled: true  # 是否启用 agents 系统
+  show_in_catalog: true  # 是否在 SystemMessage 中显示 agents 目录
+
+# Core agents - Always available (类似 core tools)
+core: {}
+
+# Optional agents - Can be enabled/disabled via @mention
+optional:
+  # ========== SimpleAgent ==========
+  simple:
+    # Identity
+    name: "SimpleAgent"
+    description: "轻量级 Agent，适合快速执行简单任务（无状态，单次调用）"
+    provider: "local"  # local | remote
+    version: "1.0.0"
+
+    # Service Endpoint
+    factory_path: "simpleAgent.simple_agent:SimpleAgent"
+
+    # Capabilities (能力特性)
+    capabilities:
+      - name: "stateless"
+        description: "无状态，不保留会话历史"
+      - name: "fast"
+        description: "快速响应，无需初始化开销"
+      - name: "single_turn"
+        description: "单轮对话，一次性完成任务"
+      - name: "template_support"
+        description: "支持自定义 Prompt 模板"
+
+    # Skills (技能清单) ⭐ 核心部分
+    skills:
+      - name: "quick_analysis"
+        description: "快速分析单个文件（<100 行代码）或小型文档"
+        input_mode: "text"  # text | json | structured | multimodal
+        output_mode: "markdown"  # text | json | markdown | stream
+        examples:
+          - "分析 uploads/script.py 的复杂度"
+          - "审查 uploads/config.json 的语法错误"
+          - "检查 uploads/data.csv 的数据质量"
+        parameters:
+          file_path: "要分析的文件路径"
+          template: "（可选）自定义分析模板"
+
+      - name: "reasoning_task"
+        description: "使用推理模型解决数学/逻辑问题（支持复杂推理）"
+        input_mode: "text"
+        output_mode: "text"
+        examples:
+          - "计算 fibonacci(100)"
+          - "解决8皇后问题"
+          - "证明费马大定理"
+        parameters:
+          task: "数学或逻辑问题描述"
+          model_type: "（可选）指定模型类型，默认 reasoning"
+
+      - name: "code_review"
+        description: "快速代码审查（语法、风格、安全问题）"
+        input_mode: "text"
+        output_mode: "markdown"
+        examples:
+          - "审查 uploads/api.py 的安全问题"
+          - "检查 uploads/component.tsx 的 React 最佳实践"
+        parameters:
+          file_path: "代码文件路径"
+          focus: "（可选）审查重点，如 security, style, performance"
+
+    # Metadata
+    tags:
+      - "lightweight"
+      - "stateless"
+      - "single-turn"
+      - "fast"
+    enabled: true  # 启动时启用
+    always_available: false  # 不是全局可用（需要 @mention）
+    available_to_subagent: true  # 子 agent 可以调用
+
+  # ========== GeneralAgent ==========
+  # 注意：GeneralAgent 配置自己主要用于：
+  # 1. 元数据记录（记录自己的能力和技能）
+  # 2. 未来扩展（Supervisor 模式、Agent 发现 API）
+  # 3. 当前不会实际调用（enabled: false + available_to_subagent: false）
+  general:
+    # Identity
+    name: "GeneralAgent"
+    description: "完整功能的 Agent，支持技能、多轮对话、会话持久化（有状态）"
+    provider: "local"
+    version: "1.0.0"
+
+    # Service Endpoint
+    factory_path: "generalAgent.runtime.app:build_application"  # 返回 (app, factory)
+
+    # Capabilities
+    capabilities:
+      - name: "stateful"
+        description: "有状态，保留完整会话历史"
+      - name: "multi_turn"
+        description: "支持多轮对话和复杂推理"
+      - name: "skill_system"
+        description: "支持加载和使用技能包（@mention skills）"
+      - name: "hitl"
+        description: "支持人机交互审批（Human-in-the-Loop）"
+      - name: "persistence"
+        description: "支持会话持久化（SQLite）"
+      - name: "workspace"
+        description: "独立的工作空间隔离"
+
+    # Skills
+    skills:
+      - name: "complex_document_analysis"
+        description: "分析大型文档（>10 页 PDF/DOCX/XLSX/PPTX）"
+        input_mode: "text"
+        output_mode: "markdown"
+        examples:
+          - "分析 uploads/report.pdf（80页），提取所有表格数据"
+          - "总结 uploads/research.docx（50页）的研究结论"
+          - "分析 uploads/data.xlsx（20个工作表）的财务指标"
+        parameters:
+          file_path: "文档路径"
+          task: "分析任务描述"
+
+      - name: "skill_based_task"
+        description: "需要使用技能包的任务（如 @pdf, @docx 技能）"
+        input_mode: "text"
+        output_mode: "text"
+        examples:
+          - "使用 @pdf 技能填写 uploads/form.pdf 表单"
+          - "使用 @docx 技能修改 uploads/contract.docx 中的合同条款"
+        parameters:
+          skill: "技能包名称（如 pdf, docx）"
+          task: "任务描述"
+
+      - name: "multi_step_research"
+        description: "多步骤研究任务（需要多轮工具调用）"
+        input_mode: "text"
+        output_mode: "markdown"
+        examples:
+          - "研究 Python 3.13 的新特性，并生成对比报告"
+          - "分析竞品的定价策略，生成市场分析报告"
+        parameters:
+          topic: "研究主题"
+          output_format: "输出格式（如 markdown 表格、JSON）"
+
+    # Metadata
+    tags:
+      - "full-featured"
+      - "stateful"
+      - "multi-turn"
+      - "complex"
+    enabled: false  # 默认不启用（GeneralAgent 节点尚未实现）
+    always_available: false
+    available_to_subagent: false  # 子 agent 不能调用（防止无限递归）
+
+# ========== 未来扩展示例 ==========
+# 可以添加更多专用 agents，如：
+#
+# qa_agent:
+#   name: "QAAgent"
+#   description: "专门用于问答和知识检索的 Agent"
+#   provider: "local"
+#   factory_path: "qaAgent.app:build_qa_agent"
+#   capabilities:
+#     - name: "retrieval"
+#       description: "支持向量检索和语义搜索"
+#   skills:
+#     - name: "knowledge_retrieval"
+#       description: "从知识库检索相关信息"
+#       input_mode: "text"
+#       output_mode: "text"
+#   tags: ["qa", "retrieval"]
+#   enabled: false
+#
+# code_agent:
+#   name: "CodeAgent"
+#   description: "专门用于代码生成和审查的 Agent"
+#   provider: "local"
+#   factory_path: "codeAgent.app:build_code_agent"
+#   capabilities:
+#     - name: "code_generation"
+#       description: "生成高质量代码"
+#     - name: "test_generation"
+#       description: "自动生成单元测试"
+#   skills:
+#     - name: "code_generation"
+#       description: "根据需求生成代码"
+#       input_mode: "text"
+#       output_mode: "text"
+#   tags: ["code", "generation"]
+#   enabled: false

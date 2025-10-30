@@ -13,6 +13,7 @@ AgentGraph 文档组织为六个核心文档，每个文档专注于特定方面
 - Part 2: 工具系统（三层架构、发现机制、配置、TODO 工具）
 - Part 3: 技能系统（知识包、注册表、依赖管理）
 - Part 4: 最佳实践（路径处理、Prompt 工程、错误处理）
+- Part 5: Agent 系统（Handoff Pattern、Agent Card 标准、A2A Protocol）⭐ NEW
 
 **何时阅读**：理解系统内部机制、实现新功能、架构决策
 
@@ -257,6 +258,9 @@ optional:
 | 工具系统 | ARCHITECTURE.md | Part 2 |
 | 技能系统 | ARCHITECTURE.md | Part 3 |
 | TODO 工具 | ARCHITECTURE.md | Part 2.7 |
+| Agent 系统 | ARCHITECTURE.md | Part 5 ⭐ |
+| Handoff Pattern | ARCHITECTURE.md | Part 5.4 ⭐ |
+| Agent Card 标准 | ARCHITECTURE.md | Part 5.2 ⭐ |
 | 工作区 | FEATURES.md | Part 1 |
 | @Mentions | FEATURES.md | Part 2 |
 | 文件上传 | FEATURES.md | Part 3 |
@@ -286,12 +290,12 @@ grep -r "build_planner_node" docs/*.md
 
 | 文档 | 大小 | 行数 | 最后更新 |
 |-----|------|-----|---------|
-| ARCHITECTURE.md | ~1500 行 | ~60 KB | 2025-10-27 |
-| FEATURES.md | ~1200 行 | ~50 KB | 2025-10-27 |
-| DEVELOPMENT.md | ~800 行 | ~35 KB | 2025-10-27 |
-| OPTIMIZATION.md | ~1000 行 | ~65 KB | 2025-10-27 |
-| TESTING.md | ~600 行 | ~25 KB | 2025-10-27 |
-| **总计** | **~5100 行** | **~235 KB** | - |
+| ARCHITECTURE.md | ~2800 行 | ~100 KB | 2025-10-30 ⭐ |
+| FEATURES.md | ~3500 行 | ~103 KB | 2025-10-27 |
+| DEVELOPMENT.md | ~2700 行 | ~67 KB | 2025-10-27 |
+| OPTIMIZATION.md | ~1960 行 | ~59 KB | 2025-10-27 |
+| TESTING.md | ~2800 行 | ~77 KB | 2025-10-27 |
+| **总计** | **~13760 行** | **~406 KB** | - |
 
 ---
 
@@ -327,6 +331,10 @@ grep -r "build_planner_node" docs/*.md
 
 ## 📅 最近更新
 
+- **2025-10-30**：整合 Agent 系统文档（ARCHITECTURE.md Part 5）⭐ NEW
+  - 合并 `AGENT_REGISTRY_DESIGN.md`、`AGENT_REGISTRY_IMPLEMENTATION.md`、`HANDOFF_PATTERN.md` 到 ARCHITECTURE.md
+  - 删除冗余的 3 个 Agent 文档
+  - 添加完整的 Handoff Pattern 实现说明
 - **2025-10-27**：文档重组（14 个文档 → 6 个核心文档）
 - **2025-10-27**：添加 TODO 工具文档（ARCHITECTURE.md Part 2.7）
 - **2025-10-27**：添加 SQLite FTS5 文档（OPTIMIZATION.md Part 3）

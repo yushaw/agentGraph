@@ -23,6 +23,12 @@ core:
     tags: ["agent", "delegation"]
     description: "Delegate complex multi-step tasks to an isolated agent"
 
+  call_agent:
+    category: "agent"
+    tags: ["agent", "delegation", "multi-agent"]
+    available_to_subagent: true
+    description: "Call other agents based on Agent Card standard (@simple, @general, etc.)"
+
   read_file:
     category: "file"
     tags: ["file", "read"]

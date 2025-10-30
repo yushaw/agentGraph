@@ -76,6 +76,7 @@ def build_planner_node(
     skill_registry,
     skill_config,
     settings,
+    agent_registry=None,  # NEW: Agent Registry（可选）
 ):
     """Create a planner node bound to runtime registries."""
 
@@ -90,10 +91,19 @@ def build_planner_node(
     # Build base system prompts (main agent and subagent)
     # Datetime tag is placed at the bottom of system prompt for better KV cache reuse
     # Only include enabled skills in catalog (controlled by skills.yaml)
-    static_main_prompt = f"{PLANNER_SYSTEM_PROMPT}\n\n{build_skills_catalog(skill_registry, skill_config)}\n\n{static_datetime_tag}"
+    skills_catalog = build_skills_catalog(skill_registry, skill_config)
+    agents_catalog = agent_registry.get_catalog_text() if agent_registry else ""
+
+    static_main_prompt = f"{PLANNER_SYSTEM_PROMPT}\n\n{skills_catalog}"
+    if agents_catalog:
+        static_main_prompt += f"\n\n{agents_catalog}"
+    static_main_prompt += f"\n\n{static_datetime_tag}"
+
     static_subagent_prompt = f"{SUBAGENT_SYSTEM_PROMPT}\n\n{static_datetime_tag}"
 
     LOGGER.info(f"Built static system prompts with datetime: {static_datetime_tag}")
+    if agents_catalog:
+        LOGGER.info(f"  - Included Agent Catalog with {len(agent_registry.list_enabled())} agents")
 
     @with_error_boundary("planner")
     async def planner_node(state: AppState) -> AppState:
@@ -115,7 +125,7 @@ def build_planner_node(
 
         if mentioned:
             # Classify mentions by type
-            classifications = classify_mentions(mentioned, tool_registry, skill_registry)
+            classifications = classify_mentions(mentioned, tool_registry, skill_registry, agent_registry)
             grouped_mentions = group_by_type(classifications)
 
             if grouped_mentions['unknown']:
@@ -133,14 +143,32 @@ def build_planner_node(
                     except KeyError:
                         LOGGER.error(f"@{tool_name} load failed")
 
-            # Handle @agent mentions (ensure delegate_task is available)
+            # Handle @agent mentions (load agents and ensure call_agent tool is available)
             if grouped_mentions['agents']:
+                # Load mentioned agents on-demand
+                if agent_registry:
+                    for agent_id in grouped_mentions['agents']:
+                        try:
+                            agent_registry.load_on_demand(agent_id)
+                            LOGGER.info(f"Loaded agent: @{agent_id}")
+                        except KeyError:
+                            LOGGER.warning(f"Agent @{agent_id} not found in registry")
+
+                # Ensure call_agent tool is available
+                try:
+                    call_agent_tool = tool_registry.get_tool("call_agent")
+                    if call_agent_tool not in visible_tools:
+                        visible_tools.append(call_agent_tool)
+                except KeyError:
+                    LOGGER.warning("call_agent tool not found (agents system may not be enabled)")
+
+                # Also include delegate_task for backward compatibility
                 try:
                     delegate_tool = tool_registry.get_tool("delegate_task")
                     if delegate_tool not in visible_tools:
                         visible_tools.append(delegate_tool)
                 except KeyError:
-                    LOGGER.warning("delegate_task not found")
+                    pass  # delegate_task is optional
 
         # Deduplicate
         deduped: List[BaseTool] = []
@@ -188,7 +216,7 @@ def build_planner_node(
         new_mentions = state.get("new_mentioned_agents", [])
         new_grouped_mentions = {"tools": [], "skills": [], "agents": [], "unknown": []}
         if new_mentions:
-            new_classifications = classify_mentions(new_mentions, tool_registry, skill_registry)
+            new_classifications = classify_mentions(new_mentions, tool_registry, skill_registry, agent_registry)
             new_grouped_mentions = group_by_type(new_classifications)
 
         LOGGER.info("Building system prompt...")
@@ -199,6 +227,7 @@ def build_planner_node(
             mentioned_agents=new_grouped_mentions.get('agents', []),
             has_images=has_images,
             has_code=has_code,
+            agent_registry=agent_registry,  # NEW: For showing detailed agent info
         )
 
         # Clean and safely truncate message history (configurable via MAX_MESSAGE_HISTORY)

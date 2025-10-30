@@ -284,8 +284,8 @@ class DocumentSettings(BaseModel):
     """
 
     # Text file limits
-    text_file_max_size: int = 10_000  # 10KB - full read threshold
-    text_preview_chars: int = 5_000   # 5K chars - preview size for large text files
+    text_file_max_size: int = 50_000  # 50KB - full read threshold
+    text_preview_chars: int = 20_000   # 20K chars - preview size for large text files
 
     # PDF preview limits
     pdf_preview_pages: int = 5

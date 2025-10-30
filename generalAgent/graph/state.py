@@ -53,6 +53,11 @@ class AppState(TypedDict, total=False):
     uploaded_files: List[Any]  # All uploaded files (historical record, never cleared)
     new_uploaded_files: List[Any]  # Files uploaded in current turn (for reminder generation, cleared after use)
 
+    # ========== Agent system (NEW) ==========
+    agent_call_stack: List[str]  # 当前调用栈（嵌套层级），用于循环检测 (e.g., ["agent", "simple"])
+    agent_call_history: List[str]  # 历史调用记录（已返回的），用于审计 (e.g., ["simple", "simple", "general"])
+    current_agent: Optional[str]  # Current active agent (for handoff routing, e.g., "agent", "simple")
+
     # ========== Context management (Token tracking and compression) ==========
     cumulative_prompt_tokens: int  # Current context size in tokens (not cumulative!)
     cumulative_completion_tokens: int  # Cumulative completion tokens since last compression

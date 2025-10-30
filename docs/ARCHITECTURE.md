@@ -35,6 +35,18 @@
   - [4.3 错误处理](#43-错误处理)
   - [4.4 日志与调试](#44-日志与调试)
   - [4.5 配置管理](#45-配置管理)
+- [第五部分：Agent 系统（Handoff Pattern）](#第五部分agent-系统handoff-pattern)
+  - [5.1 概述](#51-概述)
+  - [5.2 Agent Card 标准](#52-agent-card-标准)
+  - [5.3 Agent Registry（三层架构）](#53-agent-registry三层架构)
+  - [5.4 Handoff Pattern 实现](#54-handoff-pattern-实现)
+  - [5.5 Agent Catalog 优化](#55-agent-catalog-优化)
+  - [5.6 使用方式](#56-使用方式)
+  - [5.7 与 LangChain 2023 Agent Types 的对比](#57-与-langchain-2023-agent-types-的对比)
+  - [5.8 文件改动清单](#58-文件改动清单)
+  - [5.9 测试验证](#59-测试验证)
+  - [5.10 未来扩展](#510-未来扩展)
+  - [5.11 参考资料](#511-参考资料)
 
 ---
 
@@ -2021,6 +2033,718 @@ db_path = settings.observability.session_db_path
 
 ---
 
+## 第五部分：Agent 系统（Handoff Pattern）
+
+### 5.1 概述
+
+**设计理念**: 基于 **A2A Protocol Agent Card 标准**和 **LangGraph 2025 Handoff Pattern** 最佳实践实现 agent-to-agent 通信。
+
+**核心特性**:
+- Agent 发现与调用（基于 Agent Card 标准）
+- Handoff tools（`transfer_to_{agent_id}`）自动生成
+- Agent nodes 作为 graph 一等公民
+- 动态路由和任务移交
+- Agent Catalog 优化（精简模式 + @mention 详细信息）
+
+---
+
+### 5.2 Agent Card 标准
+
+基于 A2A Protocol，定义完整的 agent 元数据：
+
+```python
+# generalAgent/agents/schema.py:15-65
+@dataclass
+class AgentSkill:
+    """Agent 技能描述（遵循 A2A Protocol）"""
+    name: str
+    description: str
+    input_mode: str  # text | json | structured | multimodal
+    output_mode: str  # text | json | markdown | stream
+    examples: List[str]
+    parameters: Dict[str, str]
+
+@dataclass
+class AgentCapability:
+    """Agent 能力特性"""
+    name: str
+    description: str
+
+@dataclass
+class AgentCard:
+    """Agent Card（基于 A2A Protocol）"""
+    # Identity
+    id: str
+    name: str
+    description: str
+    provider: AgentProvider  # local | remote
+    version: str
+
+    # Service Endpoint
+    factory_path: str  # 工厂函数路径（如 "simpleAgent.simple_agent:SimpleAgent"）
+
+    # Capabilities & Skills
+    capabilities: List[AgentCapability]
+    skills: List[AgentSkill]
+
+    # Metadata
+    tags: List[str]
+    enabled: bool
+    always_available: bool
+    available_to_subagent: bool
+```
+
+**配置示例** (`generalAgent/config/agents.yaml`):
+```yaml
+optional:
+  simple:
+    name: "SimpleAgent"
+    description: "轻量级 Agent，适合快速执行简单任务（无状态，单次调用）"
+    provider: "local"
+    version: "1.0.0"
+    factory_path: "simpleAgent.simple_agent:SimpleAgent"
+
+    capabilities:
+      - name: "stateless"
+        description: "无状态，不保留会话历史"
+      - name: "fast"
+        description: "快速响应，无需初始化开销"
+
+    skills:
+      - name: "quick_analysis"
+        description: "快速分析单个文件（<100 行代码）或小型文档"
+        input_mode: "text"
+        output_mode: "markdown"
+        examples:
+          - "分析 uploads/script.py 的复杂度"
+        parameters:
+          file_path: "要分析的文件路径"
+
+    tags: ["lightweight", "stateless", "fast"]
+    enabled: true
+    available_to_subagent: true
+```
+
+---
+
+### 5.3 Agent Registry（三层架构）
+
+Agent Registry 采用与 Tool/Skill Registry 一致的三层架构：
+
+```python
+# generalAgent/agents/registry.py:20-95
+class AgentRegistry:
+    """Agent 注册表（三层架构）"""
+
+    def __init__(self):
+        self._discovered: Dict[str, AgentCard] = {}  # 所有发现的 agents
+        self._enabled: Dict[str, AgentCard] = {}     # 已启用的 agents
+        self._instances: Dict[str, Any] = {}         # 已实例化的 agents（缓存）
+
+    # === Layer 1: 发现 ===
+    def register_discovered(self, card: AgentCard):
+        """注册发现的 agent（从配置扫描）"""
+        self._discovered[card.id] = card
+        if card.enabled:
+            self._enabled[card.id] = card
+
+    # === Layer 2: 查询 ===
+    def query_by_skill(self, skill_name: str) -> List[AgentCard]:
+        """按技能查询 agents"""
+        return [
+            card for card in self._enabled.values()
+            if any(s.name == skill_name for s in card.skills)
+        ]
+
+    def query_by_tags(self, tags: List[str]) -> List[AgentCard]:
+        """按标签查询 agents"""
+        return [
+            card for card in self._enabled.values()
+            if any(tag in card.tags for tag in tags)
+        ]
+
+    def query_by_capability(self, capability_name: str) -> List[AgentCard]:
+        """按能力查询 agents"""
+        return [
+            card for card in self._enabled.values()
+            if any(cap.name == capability_name for cap in card.capabilities)
+        ]
+
+    # === Layer 3: 按需加载 ===
+    def load_on_demand(self, agent_id: str) -> bool:
+        """按需加载 agent（从 discovered 移到 enabled）"""
+        if agent_id in self._enabled:
+            return True  # 已加载
+
+        card = self._discovered.get(agent_id)
+        if not card:
+            return False
+
+        self._enabled[agent_id] = card
+        return True
+```
+
+**设计考量**:
+- **三层分离**: discovered（配置）→ enabled（加载）→ instances（实例化）
+- **Query Pattern**: 支持按技能/标签/能力多种查询方式
+- **延迟加载**: 只有被 @mention 或 enabled=true 的 agents 才会加载
+- **实例缓存**: 避免重复实例化
+
+---
+
+### 5.4 Handoff Pattern 实现
+
+**架构演进**（Agent-as-Tool → Handoff Pattern）:
+
+```
+❌ 之前（Agent-as-Tool）:
+Graph: START → agent ⇄ tools → finalize → END
+调用: call_agent(agent_id, task) → 返回结果字符串
+问题: SimpleAgent 不在 graph 中，无法利用 LangGraph 能力
+
+✅ 现在（Handoff Pattern）:
+Graph: START → agent ⇄ tools ⇄ simple → finalize → END
+调用: transfer_to_simple(task) → Command(goto="simple")
+优势: SimpleAgent 是 graph 一等公民，支持多轮、HITL、checkpointer
+```
+
+#### 5.4.1 Handoff Tools 生成
+
+为每个 enabled agent 自动生成 `transfer_to_{agent_id}` 工具：
+
+```python
+# generalAgent/agents/handoff_tools.py:22-61
+def create_agent_handoff_tools(agent_registry) -> List[BaseTool]:
+    """为所有 enabled agents 创建 handoff tools"""
+
+    handoff_tools = []
+
+    for card in agent_registry.list_enabled():
+        agent_id = card.id
+        agent_name = card.name
+        description = card.description
+        skills = [s.name for s in card.skills]
+
+        # 动态创建 handoff tool
+        handoff_tool = _create_single_handoff_tool(
+            agent_id=agent_id,
+            agent_name=agent_name,
+            description=description,
+            skills=skills,
+        )
+
+        handoff_tools.append(handoff_tool)
+
+    return handoff_tools
+```
+
+**单个 Handoff Tool 实现**:
+
+```python
+# generalAgent/agents/handoff_tools.py:64-142
+def _create_single_handoff_tool(
+    agent_id: str,
+    agent_name: str,
+    description: str,
+    skills: List[str],
+) -> BaseTool:
+    """创建单个 handoff tool"""
+
+    tool_name = f"transfer_to_{agent_id}"
+    skills_str = ", ".join(skills) if skills else "通用任务"
+
+    tool_description = f"""Transfer control to {agent_name}
+
+{description}
+
+**技能:** {skills_str}
+
+**何时使用:**
+当任务需要该 agent 的专业能力时，将任务完全移交给它处理。
+
+**注意:**
+- 任务描述必须详细，目标 agent 无法访问当前对话历史
+- 移交后，该 agent 将接管对话直到任务完成
+- 完成后会自动返回结果
+"""
+
+    def handoff_tool_func(
+        task: str,
+        state: Annotated[dict, InjectedState],
+        tool_call_id: Annotated[str, InjectedToolCallId],
+    ) -> Command:
+        """Handoff tool 执行函数"""
+
+        # 创建 handoff message
+        handoff_msg = ToolMessage(
+            content=f"✓ Transferred to {agent_name}",
+            tool_call_id=tool_call_id,
+            name=tool_name,
+        )
+
+        # 创建新任务 message
+        task_msg = HumanMessage(content=task)
+
+        # 准备状态更新
+        current_messages = state.get("messages", [])
+        agent_call_history = state.get("agent_call_history", [])
+
+        update = {
+            "messages": current_messages + [handoff_msg, task_msg],
+            "agent_call_history": agent_call_history + [agent_id],
+            "current_agent": agent_id,  # 记录当前 agent
+        }
+
+        # 返回 Command 对象（关键！）
+        return Command(
+            goto=agent_id,  # 跳转到目标 agent 节点
+            update=update,
+        )
+
+    # Wrap with @tool decorator
+    handoff_tool = tool(tool_description)(handoff_tool_func)
+    handoff_tool.name = tool_name
+    handoff_tool.description = tool_description
+
+    return handoff_tool
+```
+
+**关键设计**:
+- **Command 对象**: `Command(goto=agent_id, update={...})` 实现动态跳转
+- **InjectedState**: 获取父状态，传递上下文
+- **agent_call_history**: 追踪调用链，防止循环
+- **current_agent**: 标记当前活跃 agent，供 routing 使用
+
+---
+
+#### 5.4.2 Agent Nodes
+
+每个 agent 作为独立的 graph 节点：
+
+```python
+# generalAgent/graph/nodes/agent_nodes.py:20-65
+async def simple_agent_node(state: AppState) -> Command:
+    """Execute SimpleAgent and return to main agent"""
+
+    # 获取任务（最后一条 HumanMessage）
+    task = state["messages"][-1].content
+
+    # 执行 SimpleAgent
+    from simpleAgent.simple_agent import SimpleAgent
+    agent = SimpleAgent()
+    result = agent.run(task)
+
+    # 返回 main agent
+    return Command(
+        goto="agent",
+        update={
+            "messages": [AIMessage(content=result)],
+        }
+    )
+
+def build_agent_node_from_card(agent_card: AgentCard):
+    """根据 AgentCard 动态构建 agent 节点"""
+
+    agent_id = agent_card.id
+
+    if agent_id == "simple":
+        return simple_agent_node
+    elif agent_id == "general":
+        # 未来实现
+        return build_general_agent_node()
+    else:
+        raise ValueError(f"Unknown agent type: {agent_id}")
+```
+
+**设计考量**:
+- **异步支持**: 使用 `async def` 支持异步 agents
+- **Command 返回**: 返回 `Command(goto="agent")` 回到主 agent
+- **动态构建**: 根据 AgentCard 动态选择 agent 实现
+- **状态更新**: 将结果作为 AIMessage 添加到 messages
+
+---
+
+#### 5.4.3 动态路由
+
+`tools_route` 支持动态跳转到 agent 节点：
+
+```python
+# generalAgent/graph/routing.py:30-55
+def tools_route(state: AppState) -> str:
+    """Route after tools node - check for handoff or return to calling agent"""
+
+    # 检查 current_agent 字段（由 Command.update 设置）
+    current_agent = state.get("current_agent", "agent")
+
+    # 如果有 handoff，跳转到目标 agent
+    if current_agent and current_agent != "agent":
+        LOGGER.info(f"Routing to agent: {current_agent}")
+        return current_agent
+
+    # 否则返回 main agent
+    return "agent"
+```
+
+**Graph 结构修改**:
+
+```python
+# generalAgent/graph/builder.py:105-145
+def build_graph(*, agent_registry=None, ...):
+    graph = StateGraph(AppState)
+
+    # 添加核心节点
+    graph.add_node("agent", planner_node)
+    graph.add_node("tools", tools_node)
+    graph.add_node("finalize", finalize_node)
+
+    # 添加 agent 节点（动态）
+    if agent_registry:
+        for card in agent_registry.list_enabled():
+            agent_node = build_agent_node_from_card(card)
+            graph.add_node(card.id, agent_node)
+            LOGGER.info(f"Added agent node: {card.id}")
+
+    # 路由映射
+    tools_routing_map = {"agent": "agent"}
+    if agent_registry:
+        for card in agent_registry.list_enabled():
+            tools_routing_map[card.id] = card.id
+
+    # 添加条件边
+    graph.add_conditional_edges(
+        "tools",
+        tools_route,
+        tools_routing_map,  # {"agent": "agent", "simple": "simple", ...}
+    )
+```
+
+**设计考量**:
+- **动态节点**: 根据 enabled agents 动态添加节点
+- **动态路由映射**: 自动生成路由表
+- **向后兼容**: 无 agent 时，`tools_route` 仍返回 "agent"
+
+---
+
+### 5.5 Agent Catalog 优化
+
+**两层显示模式**:
+
+#### 5.5.1 精简模式（默认）
+
+在 SystemMessage 中显示简洁的 agents 列表：
+
+```python
+# generalAgent/agents/registry.py:120-135
+def get_catalog_text(self, detailed: bool = False) -> str:
+    """生成 Agent Catalog 文本"""
+
+    if detailed:
+        # 详细模式（未来可能使用）
+        ...
+    else:
+        # 精简模式（默认）
+        lines = ["# 可用 Agents（Agents）\n"]
+
+        for card in self.list_enabled():
+            lines.append(f"- **@{card.id}**: {card.description}")
+
+        lines.append("\n提示：使用 @agent_id 来查看详细技能信息并调用该 agent。")
+
+        return "\n".join(lines)
+```
+
+**输出示例**:
+```markdown
+# 可用 Agents（Agents）
+
+- **@simple**: 轻量级 Agent，适合快速执行简单任务（无状态，单次调用）
+
+提示：使用 @agent_id 来查看详细技能信息并调用该 agent。
+```
+
+**优势**:
+- 节省 tokens（~70-90% 减少）
+- 提升 KV Cache 复用率
+- 避免信息过载
+
+---
+
+#### 5.5.2 @mention 时显示详细信息
+
+当用户 @mention agent 时，动态注入详细信息到 reminder：
+
+```python
+# generalAgent/graph/prompts.py:200-230
+def build_dynamic_reminder(
+    *,
+    mentioned_agents: list = None,
+    agent_registry = None,  # 新增参数
+) -> str:
+    """构建上下文感知的系统提醒"""
+
+    reminders = []
+
+    # Agent 提及（新增）
+    if mentioned_agents and agent_registry:
+        agent_details = []
+        for agent_id in mentioned_agents:
+            card = agent_registry.get(agent_id)
+            if card:
+                agent_details.append(card.get_catalog_text())  # 详细信息
+
+        if agent_details:
+            agents_catalog = "\n\n".join(agent_details)
+            reminders.append(
+                f"<system_reminder>用户提到了以下 agents，"
+                f"你可以使用 transfer_to_{{agent_id}} 工具将任务完全移交给该 agent 处理：\n\n"
+                f"{agents_catalog}\n\n"
+                f"</system_reminder>"
+            )
+
+    return "\n\n".join(reminders) if reminders else ""
+```
+
+**AgentCard 详细信息生成**:
+
+```python
+# generalAgent/agents/schema.py:100-145
+def get_catalog_text(self) -> str:
+    """生成单个 agent 的详细信息"""
+
+    lines = [f"## @{self.id} - {self.name}"]
+    lines.append(self.description)
+    lines.append("")
+
+    # 技能
+    if self.skills:
+        lines.append("**技能：**")
+        for skill in self.skills:
+            lines.append(f"- **{skill.name}**: {skill.description}")
+            if skill.examples:
+                for example in skill.examples[:2]:  # 最多2个示例
+                    lines.append(f"  - 示例: `{example}`")
+        lines.append("")
+
+    # 能力特性
+    if self.capabilities:
+        cap_names = [cap.name for cap in self.capabilities]
+        lines.append(f"**特性**: {', '.join(cap_names)}")
+        lines.append("")
+
+    # 标签
+    if self.tags:
+        lines.append(f"**标签**: {', '.join(self.tags)}")
+
+    return "\n".join(lines)
+```
+
+**输出示例**:
+```markdown
+<system_reminder>用户提到了以下 agents，你可以使用 transfer_to_{agent_id} 工具将任务完全移交给该 agent 处理：
+
+## @simple - SimpleAgent
+轻量级 Agent，适合快速执行简单任务（无状态，单次调用）
+
+**技能：**
+- **quick_analysis**: 快速分析单个文件（<100 行代码）或小型文档
+  - 示例: `分析 uploads/script.py 的复杂度`
+- **reasoning_task**: 使用推理模型解决数学/逻辑问题（支持复杂推理）
+  - 示例: `计算 fibonacci(100)`
+
+**特性**: stateless, fast, single_turn, template_support
+
+**标签**: lightweight, stateless, single-turn, fast
+
+</system_reminder>
+```
+
+**设计考量**:
+- **按需显示**: 只有 @mention 时才显示详细信息
+- **完整技能信息**: 包括示例、参数
+- **能力和标签**: 帮助 LLM 理解 agent 特性
+- **XML 包裹**: 使用 `<system_reminder>` 标记为系统提示
+
+---
+
+### 5.6 使用方式
+
+#### 5.6.1 用户通过 @mention 触发
+
+```
+User> @simple 分析 uploads/script.py 的复杂度
+
+System>
+  - 解析 @simple
+  - 加载 SimpleAgent（load_on_demand）
+  - 在 reminder 中显示详细技能信息
+  - LLM 看到 transfer_to_simple 工具
+
+LLM> transfer_to_simple(task="分析 uploads/script.py 的复杂度")
+
+System>
+  - tools node 执行 transfer_to_simple
+  - 返回 Command(goto="simple", ...)
+  - tools_route 返回 "simple"
+  - 跳转到 simple_agent 节点
+
+Simple Agent>
+  - 执行分析任务
+  - 返回 Command(goto="agent", update={"messages": [result]})
+
+Main Agent>
+  - 收到结果，继续对话
+```
+
+#### 5.6.2 LLM 自动选择合适的 agent
+
+```python
+# LLM 看到 Agent Catalog（精简）
+"""
+# 可用 Agents（Agents）
+
+- **@simple**: 轻量级 Agent，适合快速执行简单任务（无状态，单次调用）
+"""
+
+# LLM 自主决定
+User> 帮我快速分析这个脚本
+LLM> [看到任务简单，决定使用 @simple]
+     transfer_to_simple(task="分析脚本...")
+```
+
+---
+
+### 5.7 与 LangChain 2023 Agent Types 的对比
+
+| LangChain 2023 | AgentGraph 实现（2025） |
+|----------------|---------------------|
+| `agent_type="zero-shot-react-description"` | Agent Loop (planner node) |
+| 固定的 5-6 种 agent 类型 | 灵活的 graph 架构 |
+| 黑盒执行 | 透明的节点流程 |
+| 不支持 handoff | ✅ Handoff Pattern |
+| 不支持 HITL | ✅ HITL（interrupt） |
+| 不支持 context compression | ✅ Auto-compression |
+
+**关键理解**:
+- `agent_type` 是 **Prompt 模板 + 执行逻辑的组合包**，不是特定 agent 实例
+- 我们的 planner_node 本质上是 `zero-shot-react-description` 的现代化版本
+- LangGraph 的哲学：**Everything is a node**
+
+---
+
+### 5.8 文件改动清单
+
+| 文件 | 改动类型 | 说明 |
+|------|----------|------|
+| `generalAgent/agents/handoff_tools.py` | **新建** | 生成 handoff tools |
+| `generalAgent/graph/nodes/agent_nodes.py` | **新建** | Agent 节点实现 |
+| `generalAgent/graph/routing.py` | 修改 | tools_route 支持动态路由 |
+| `generalAgent/graph/builder.py` | 修改 | 添加 agent 节点和路由映射 |
+| `generalAgent/graph/state.py` | 修改 | 添加 `current_agent` 字段 |
+| `generalAgent/graph/prompts.py` | 修改 | build_dynamic_reminder 支持 agent 详细信息 |
+| `generalAgent/graph/nodes/planner.py` | 修改 | 传递 agent_registry 到 reminder |
+| `generalAgent/runtime/app.py` | 修改 | 注册 handoff tools，初始化 state |
+| `generalAgent/agents/__init__.py` | 修改 | 导出 handoff_tools |
+| `generalAgent/graph/nodes/__init__.py` | 修改 | 导出 agent_nodes |
+| `generalAgent/agents/registry.py` | 修改 | 默认使用精简 catalog |
+| `generalAgent/agents/schema.py` | 修改 | 修复标题层级 |
+
+---
+
+### 5.9 测试验证
+
+**集成测试** (`tests/test_handoff_pattern.py`):
+
+```python
+async def test_handoff_pattern_initialization():
+    """Test 1: Handoff pattern initialization"""
+    from generalAgent.runtime import build_application
+
+    app, initial_state, _, tool_registry, _, agent_registry = await build_application()
+
+    # Verify agent registry
+    stats = agent_registry.get_stats()
+    assert stats['enabled'] >= 1, "Should have enabled agents"
+
+    # Verify handoff tools
+    handoff_tools = [t for t in tool_registry.list_tools() if t.name.startswith('transfer_to_')]
+    assert len(handoff_tools) >= 1, "Should have handoff tools"
+
+    # Verify initial state
+    state = initial_state()
+    assert state.get('current_agent') == 'agent'
+    assert state.get('agent_call_history') == []
+```
+
+**测试结果**:
+```bash
+$ uv run python tests/test_handoff_pattern.py
+
+=== Test 1: Handoff Pattern Initialization ===
+✓ Agent Registry Stats: {'discovered': 2, 'enabled': 1, ...}
+✓ Enabled Agents: ['simple']
+✓ Handoff Tools: ['transfer_to_simple']
+✓ Initial State: current_agent=agent, agent_call_history=[]
+✅ Test 1 PASSED
+
+=== TOTAL: 5/5 tests passed ===
+```
+
+---
+
+### 5.10 未来扩展
+
+#### 5.10.1 远程 Agents
+
+```yaml
+# agents.yaml
+remote_specialist:
+  provider: "remote"
+  endpoint: "https://api.example.com/agents/specialist"
+  requires_auth: true
+  skills:
+    - name: "advanced_analysis"
+      description: "深度分析和预测"
+```
+
+#### 5.10.2 Supervisor Pattern
+
+通过 routing 逻辑实现 Supervisor 模式（中央调度）：
+
+```python
+def supervisor_route(state: AppState) -> str:
+    """Supervisor 决定下一个 agent"""
+
+    task_type = classify_task(state["messages"][-1])
+
+    if task_type == "analysis":
+        return "simple"
+    elif task_type == "research":
+        return "general"
+    else:
+        return "agent"
+```
+
+#### 5.10.3 性能监控
+
+```python
+card.performance_metrics = {
+    "avg_response_time": 1.2,
+    "success_rate": 0.95,
+    "total_calls": 150,
+}
+```
+
+---
+
+### 5.11 参考资料
+
+1. **A2A Protocol - Agent Discovery**: https://a2a-protocol.org/latest/topics/agent-discovery/
+2. **LangGraph Multi-Agent Best Practices**: https://langchain-ai.github.io/langgraph/concepts/multi_agent/
+3. **Command Pattern**: https://blog.langchain.com/command-a-new-tool-for-multi-agent-architectures-in-langgraph/
+4. **Microsoft Multi-Agent Architecture**: https://github.com/microsoft/multi-agent-reference-architecture
+
+---
+
 ## 总结
 
 本架构文档整合了：
@@ -2052,16 +2776,26 @@ db_path = settings.observability.session_db_path
 - 日志（结构化、工具调用）
 - 配置管理（Pydantic、.env）
 
+**第五部分：Agent 系统（Handoff Pattern）** ⭐ NEW
+- Agent Card 标准（A2A Protocol）
+- Agent Registry（三层架构 + Query Pattern）
+- Handoff Tools（自动生成 `transfer_to_{agent_id}`）
+- Agent Nodes（graph 一等公民）
+- 动态路由（Command 跳转）
+- Agent Catalog 优化（精简 + @mention 详细信息）
+- LangGraph 2025 最佳实践
+
 ---
 
 **相关文档**:
-- [TESTING_GUIDE.md](TESTING_GUIDE.md) - 测试策略
-- [CONTEXT_MANAGEMENT.md](CONTEXT_MANAGEMENT.md) - KV 缓存优化
-- [DOCUMENT_SEARCH_OPTIMIZATION.md](DOCUMENT_SEARCH_OPTIMIZATION.md) - 搜索系统
-- [HITL_GUIDE.md](HITL_GUIDE.md) - Human-in-the-loop 模式
+- [TESTING.md](TESTING.md) - 测试策略与指南
+- [OPTIMIZATION.md](OPTIMIZATION.md) - KV 缓存优化与搜索系统
+- [FEATURES.md](FEATURES.md) - HITL 模式与其他功能特性
+- [DEVELOPMENT.md](DEVELOPMENT.md) - 开发指南
 
 **配置文件**:
 - `generalAgent/config/tools.yaml` - 工具配置
 - `generalAgent/config/skills.yaml` - 技能配置
+- `generalAgent/config/agents.yaml` - Agent 配置 ⭐
 - `generalAgent/config/hitl_rules.yaml` - HITL 审批规则
 - `.env` - 环境变量

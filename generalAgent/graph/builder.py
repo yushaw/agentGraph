@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, List
 
 from langgraph.graph import StateGraph, START, END
+
+LOGGER = logging.getLogger(__name__)
 
 from generalAgent.agents import ModelResolver
 from generalAgent.graph.nodes import (
     build_finalize_node,
     build_planner_node,
+    build_agent_node_from_card,
 )
 from generalAgent.graph.nodes.summarization import build_summarization_node
 from generalAgent.graph.routing import (
@@ -34,6 +38,7 @@ def build_state_graph(
     settings,
     checkpointer=None,
     approval_checker=None,  # HITL: 审批检测器（可选）
+    agent_registry=None,  # NEW: Agent Registry（可选）
 ):
     """Compose the agent graph with Agent Loop architecture (Claude Code style).
 
@@ -66,6 +71,7 @@ def build_state_graph(
         skill_registry=skill_registry,
         skill_config=skill_config,
         settings=settings,
+        agent_registry=agent_registry,  # NEW: Pass agent_registry to planner
     )
 
     finalize_node = build_finalize_node(
@@ -81,9 +87,20 @@ def build_state_graph(
     # ========== Build graph ==========
     graph = StateGraph(AppState)
 
-    # Add nodes
+    # Add main agent node
     graph.add_node("agent", agent_node)
     graph.add_node("summarization", summarization_node)
+
+    # Add specialized agent nodes (handoff pattern)
+    if agent_registry:
+        for card in agent_registry.list_enabled():
+            try:
+                agent_node_func = build_agent_node_from_card(card)
+                graph.add_node(card.id, agent_node_func)
+                LOGGER.info(f"Added agent node: {card.id} ({card.name})")
+            except (NotImplementedError, ValueError) as e:
+                LOGGER.warning(f"Skipping agent node {card.id}: {e}")
+                continue
 
     # Tools node with optional approval
     # IMPORTANT: Use ALL discovered tools (not just enabled ones) for ToolNode
@@ -129,14 +146,27 @@ def build_state_graph(
         }
     )
 
-    # Tools always return to agent
+    # Tools return to calling agent (supports handoff pattern)
+    # Build dynamic routing map for agent handoffs
+    tools_routing_map = {"agent": "agent"}  # Default: return to main agent
+
+    if agent_registry:
+        for card in agent_registry.list_enabled():
+            tools_routing_map[card.id] = card.id  # Add route for each agent
+
     graph.add_conditional_edges(
         "tools",
         tools_route,
-        {
-            "agent": "agent",  # Continue loop
-        }
+        tools_routing_map,
     )
+
+    # Agent nodes routing (each agent can call tools or finish)
+    if agent_registry:
+        for card in agent_registry.list_enabled():
+            # Each agent node uses same routing logic as main agent
+            # They can call tools or finish (return to main agent via Command)
+            # The agent_route is reused, but agent nodes return Command directly
+            pass  # Agent nodes return Command, no conditional edges needed
 
     # Exit
     graph.add_edge("finalize", END)

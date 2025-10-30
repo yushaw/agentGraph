@@ -8,6 +8,12 @@ from typing import List
 from generalAgent.tools import ToolRegistry
 from generalAgent.skills import SkillRegistry
 
+# Type hint for optional agent_registry (避免循环导入)
+try:
+    from generalAgent.agents.registry import AgentRegistry
+except ImportError:
+    AgentRegistry = None
+
 
 @dataclass
 class MentionClassification:
@@ -15,44 +21,48 @@ class MentionClassification:
 
     name: str
     type: str  # "tool" | "skill" | "agent" | "unknown"
-    needs_loading: bool = False  # For tools: whether on-demand loading is needed
+    needs_loading: bool = False  # For tools/agents: whether on-demand loading is needed
 
 
 def classify_mentions(
     mentions: List[str],
     tool_registry: ToolRegistry,
     skill_registry: SkillRegistry,
+    agent_registry=None,  # Optional AgentRegistry
 ) -> List[MentionClassification]:
     """Classify each @mention as tool, skill, agent, or unknown.
 
     Classification priority:
     1. Tool (already registered or discoverable)
     2. Skill (registered in skill registry)
-    3. Agent (special keyword: "agent" or specific agent names)
+    3. Agent (registered in agent registry or special keywords)
     4. Unknown
 
     Args:
         mentions: List of @mentioned names
         tool_registry: Tool registry for checking tools
         skill_registry: Skill registry for checking skills
+        agent_registry: Agent registry for checking agents (optional)
 
     Returns:
         List of classifications
 
     Examples:
-        >>> mentions = ["calc", "pdf", "agent", "unknown"]
-        >>> classify_mentions(mentions, tool_reg, skill_reg)
+        >>> mentions = ["calc", "pdf", "simple", "unknown"]
+        >>> classify_mentions(mentions, tool_reg, skill_reg, agent_reg)
         [
             MentionClassification("calc", "tool", needs_loading=False),
             MentionClassification("pdf", "skill"),
-            MentionClassification("agent", "agent"),
+            MentionClassification("simple", "agent", needs_loading=False),
             MentionClassification("unknown", "unknown"),
         ]
     """
     classifications = []
 
     for mention in mentions:
-        classification = classify_single_mention(mention, tool_registry, skill_registry)
+        classification = classify_single_mention(
+            mention, tool_registry, skill_registry, agent_registry
+        )
         classifications.append(classification)
 
     return classifications
@@ -62,6 +72,7 @@ def classify_single_mention(
     mention: str,
     tool_registry: ToolRegistry,
     skill_registry: SkillRegistry,
+    agent_registry=None,  # Optional AgentRegistry
 ) -> MentionClassification:
     """Classify a single @mention.
 
@@ -69,6 +80,7 @@ def classify_single_mention(
         mention: Mentioned name
         tool_registry: Tool registry
         skill_registry: Skill registry
+        agent_registry: Agent registry (optional)
 
     Returns:
         Classification result
@@ -95,16 +107,26 @@ def classify_single_mention(
         except KeyError:
             pass
 
-    # 3. Check if it's an agent keyword (before checking skills)
-    if mention.lower() in ("agent", "subagent", "delegate_task"):
-        return MentionClassification(mention, "agent")
-
-    # 4. Check if it's a skill
+    # 3. Check if it's a skill
     skill_meta = skill_registry.get(mention)
     if skill_meta is not None:
         return MentionClassification(mention, "skill")
 
-    # 5. Unknown
+    # 4. Check if it's an agent (new!)
+    if agent_registry is not None:
+        # Check if it's a registered agent
+        if agent_registry.is_enabled(mention):
+            return MentionClassification(mention, "agent", needs_loading=False)
+
+        # Check if it's a discoverable agent (can be loaded on-demand)
+        if agent_registry.is_discovered(mention):
+            return MentionClassification(mention, "agent", needs_loading=True)
+
+    # 5. Check if it's a legacy agent keyword (for backward compatibility)
+    if mention.lower() in ("agent", "subagent", "delegate_task"):
+        return MentionClassification(mention, "agent")
+
+    # 6. Unknown
     return MentionClassification(mention, "unknown")
 
 

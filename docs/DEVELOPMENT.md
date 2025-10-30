@@ -2720,7 +2720,7 @@ def my_function(param1: str, param2: int) -> str:
 7. **贡献** - 代码风格、测试、文档、PR
 
 更多详情，请参阅：
-- [CLAUDE.md](CLAUDE.md) - 项目概述和架构
-- [TESTING_GUIDE.md](TESTING_GUIDE.md) - 全面的测试指南
-- [REQUIREMENTS_PART4_TRICKS.md](REQUIREMENTS_PART4_TRICKS.md) - 实现技巧
-- [SKILLS_CONFIGURATION.md](SKILLS_CONFIGURATION.md) - 技能配置指南
+- [README.md](README.md) - 文档索引与导航
+- [ARCHITECTURE.md](ARCHITECTURE.md) - 核心架构与设计模式
+- [TESTING.md](TESTING.md) - 全面的测试指南
+- [OPTIMIZATION.md](OPTIMIZATION.md) - 性能优化策略

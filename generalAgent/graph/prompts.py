@@ -189,16 +189,18 @@ def build_dynamic_reminder(
     mentioned_skills: list = None,
     has_images: bool = False,
     has_code: bool = False,
+    agent_registry = None,  # NEW: For showing agent details
 ) -> str:
     """Build dynamic system reminder based on context.
 
     Args:
         active_skill: Currently activated skill name
-        mentioned_agents: List of @mentioned agents (for subagent delegation)
+        mentioned_agents: List of @mentioned agents (for handoff)
         mentioned_tools: List of @mentioned tools (already loaded into visible_tools)
         mentioned_skills: List of @mentioned skills (need to read SKILL.md)
         has_images: Whether user input contains images
         has_code: Whether user input contains code blocks
+        agent_registry: AgentRegistry for showing detailed agent info
 
     Returns:
         Dynamic reminder string to be injected into system prompt
@@ -222,9 +224,22 @@ def build_dynamic_reminder(
         skills_str = "、".join(mentioned_skills)
         reminders.append(f"<system_reminder>用户提到了技能：{skills_str}。请先使用 Read 工具读取对应的 SKILL.md 文件（位于 skills/{'{skill_id}'}/SKILL.md），然后根据文档指导执行操作。</system_reminder>")
 
-    if mentioned_agents:
+    # NEW: Show detailed agent info when @mentioned (Handoff Pattern)
+    if mentioned_agents and agent_registry:
+        agent_details = []
+        for agent_id in mentioned_agents:
+            card = agent_registry.get(agent_id)
+            if card:
+                # Show detailed agent card
+                agent_details.append(card.get_catalog_text())
+
+        if agent_details:
+            agents_catalog = "\n\n".join(agent_details)
+            reminders.append(f"<system_reminder>用户提到了以下 agents，你可以使用 transfer_to_{{agent_id}} 工具将任务完全移交给该 agent 处理：\n\n{agents_catalog}\n</system_reminder>")
+    elif mentioned_agents:
+        # Fallback: no agent_registry
         agents_str = "、".join(mentioned_agents)
-        reminders.append(f"<system_reminder>用户提到了代理：{agents_str}。你可以使用 delegate_task 工具将任务委派给子代理执行。</system_reminder>")
+        reminders.append(f"<system_reminder>用户提到了 agents：{agents_str}。</system_reminder>")
 
     # if has_images:
     #     reminders.append("<system_reminder>用户分享了图片。使用 vision 能力理解图片内容。</system_reminder>")
