@@ -1,0 +1,577 @@
+List,Card Title,Description,Labels,Members,Due Date,Checklist,Estimate (days)
+P0-核心,2.1 Agent Loop 架构,"实现基于 LangGraph 的 Agent Loop 架构（ReAct 模式），支持 LLM 自主决策的多轮对话流程。
+
+
+验收标准:
+- 支持最大 100 Loop（可配置 1-500）
+- Token 使用率 >95% 时自动路由到 summarization
+- LLM 决定无需工具时自动结束
+- Loop 限制触发时强制 finalize
+
+
+代码位置: generalAgent/graph/builder.py","Agent流程,服务端",,,,3
+P0-核心,2.2 状态定义（AppState）,"定义完整的会话状态结构，包含消息历史、工具状态、任务追踪、上下文隔离、Token 追踪等所有必要信息。
+
+
+验收标准:
+- 支持 LangChain 消息累加器（`add_messages`）
+- 支持主 Agent 和 Subagent 状态隔离
+- 支持 Token 追踪和压缩标志位
+- 所有字段类型正确，支持 TypedDict 类型检查
+
+
+代码位置: generalAgent/graph/state.py","Agent流程,服务端",,,,3
+P0-核心,2.3 Planner 节点,"实现 Planner 节点（agent 节点），负责 LLM 推理、工具可见性控制、动态提醒生成、Token 监控。
+
+
+验收标准:
+- SystemMessage 固定不变（KV Cache 优化）
+- 动态提醒追加到最后一条 HumanMessage
+- Token 使用率 >95% 时设置压缩标志位
+- 支持多模态输入检测（图片 → 自动选择 vision 模型）
+- 正确累加 Loop 计数器
+
+
+代码位置: generalAgent/graph/nodes/planner.py","Agent流程,服务端",,,"- [ ] 收集可见工具（persistent + @mentioned）
+- [ ] 检测多模态输入（图片/代码）
+- [ ] 构建 SystemMessage（静态，KV Cache 优化）
+- [ ] 构建动态提醒（技能、工具、TODO、文件上传）
+- [ ] 追加提醒到最后一条 HumanMessage",5
+P0-核心,2.4 Tools 节点（工具执行）,"实现 Tools 节点，负责执行 LLM 生成的工具调用，并返回 ToolMessage 结果。
+
+
+验收标准:
+- 支持并发执行多个工具调用
+- 支持工具按需加载（load_on_demand）
+- 支持 HITL 审批拦截
+- 错误消息清晰，包含工具名称和参数
+- 返回到调用方 Agent（支持 Handoff Pattern）
+
+
+代码位置: generalAgent/graph/builder.py:105-122","Agent流程,服务端",,,"- [ ] 解析 AIMessage 中的 tool_calls
+- [ ] 对每个 tool_call:
+- [ ] 收集所有 ToolMessage
+- [ ] 返回到 Planner 节点（或当前 Agent）",5
+P0-核心,2.5 Finalize 节点（最终输出）,"实现 Finalize 节点，负责在 Agent Loop 结束时格式化最终输出。
+
+
+验收标准:
+- 仅在最后一条消息是 ToolMessage 时执行
+- 不绑定任何工具（避免继续循环）
+- 正确处理消息历史截断
+- 生成自然语言回复
+
+
+代码位置: generalAgent/graph/nodes/finalize.py","Agent流程,服务端",,,"- [ ] 检查最后一条消息是否为 ToolMessage
+- [ ] 清理消息历史（移除无效 tool_calls）
+- [ ] 安全截断消息历史（保留最近 N 条，默认 40）
+- [ ] 调用 LLM（无工具绑定）
+- [ ] 返回最终 AIMessage",5
+P0-核心,2.6 Summarization 节点（自动压缩）,"实现 Summarization 节点，负责在 Token 使用率超过 95% 时自动压缩消息历史。
+
+
+验收标准:
+- Token 使用率 >95% 时自动触发
+- 保留最近 15% context window 的消息（或至少 10 条）
+- LLM 压缩失败时回退到紧急截断
+- 用户无感知（无通知消息）
+- 压缩后正确重置 Token 计数器
+
+
+代码位置: generalAgent/graph/nodes/summarization.py","Agent流程,服务端",,,"- [ ] 检查是否需要压缩
+- [ ] 计算保留消息数量
+- [ ] 调用 LLM 压缩旧消息
+- [ ] 生成压缩后消息列表
+- [ ] 重置 Token 计数器",5
+P0-核心,2.7 消息历史管理,"提供消息历史清理和安全截断功能，确保 OpenAI API 兼容性。
+
+
+验收标准:
+- 清理未响应的 tool_calls（避免 OpenAI API 错误）
+- 截断时保留 AIMessage-ToolMessage 对
+- 始终保留 SystemMessage
+- 可配置截断阈值（MAX_MESSAGE_HISTORY）
+
+
+代码位置: generalAgent/graph/message_utils.py","Agent流程,服务端",,,,3
+P0-核心,2.8 路由逻辑,"实现三个路由函数，控制 Agent Loop 的执行流程。
+
+
+验收标准:
+- 路由优先级正确（Loop 限制 > 压缩 > 工具调用）
+- 支持 Handoff Pattern（Multi-Agent）
+- 记录路由决策日志
+
+
+代码位置: generalAgent/graph/routing.py","Agent流程,服务端",,,"- [ ] 检查 Loop 限制（loops >= max_loops → finalize）
+- [ ] 检查压缩需求（needs_compression → summarization）
+- [ ] 检查工具调用（tool_calls → tools，否则 finalize）",3
+P0-核心,2.9 KV Cache 优化,"优化 SystemMessage 和提醒机制，最大化 KV Cache 复用率，降低推理成本。
+
+
+验收标准:
+- SystemMessage 在会话期间固定不变
+- 时间戳精度为分钟级（HH:MM UTC）
+- 动态提醒追加到最后一条 HumanMessage
+- 多轮对话中 KV Cache 复用率 ≥70%
+
+
+代码位置: generalAgent/graph/nodes/planner.py:86-107","Agent流程,服务端",,,,3
+P0-核心,FR-TOOL-001 now工具 - 时间获取,"系统应提供获取当前UTC时间的工具,支持Agent生成带时间戳的内容。
+
+
+验收标准:
+- 返回格式符合ISO 8601标准
+- 时区为UTC(避免时区混淆)
+- 响应时间<10ms
+- 无需配置,开箱即用","工具系统,服务端",,,,3
+P0-核心,FR-TOOL-002 todo_write工具 - 任务创建与更新,"系统应提供任务列表管理工具,支持创建、更新、标记完成任务,追踪任务进度。
+
+
+验收标准:
+- 任务创建后立即在state[""todos""]中可见
+- 状态更新通过LangGraph Command同步
+- 同时最多1个in_progress任务
+- 任务完成前必须有工具调用记录(通过prompt强化)","工具系统,服务端",,,"- [ ] **任务分解**: 将大任务拆分为子任务列表
+- [ ] **进度追踪**: 实时显示当前执行到哪一步
+- [ ] **团队协作**: 明确任务分配和完成状态
+- [ ] **质量保证**: 确保所有步骤都已完成",3
+P0-核心,FR-TOOL-003 todo_read工具 - 任务查看,"系统应提供查看当前任务列表的工具,支持Agent检查任务状态。
+
+
+验收标准:
+- 显示所有任务(包括completed)
+- 状态标签清晰可见
+- 响应时间<50ms","工具系统,服务端",,,"- [ ] [in_progress] 正在运行测试
+- [ ] [pending] 分析测试结果
+- [ ] [completed] 阅读代码文件",3
+P0-核心,FR-TOOL-004 delegate_task工具 - 子任务委派,"系统应支持创建同类型subagent,委派子任务执行,实现任务分解和并行处理。
+
+
+验收标准:
+- Subagent能访问继承的工具和技能
+- Subagent不能访问主对话历史
+- 最后一条消息≥200字符(或经过1次连续请求)
+- 总结包含:做了什么、发现了什么、结果是什么
+- Subagent可以使用ask_human工具
+- 用户输入带`[subagent-xxx]`前缀(清晰区分)","工具系统,服务端",,,"- [ ] **搜索任务**: ""搜索Python 3.13新特性""
+- [ ] **调试任务**: ""找到代码中所有使用deprecated API的地方""
+- [ ] **文档分析**: ""分析这个50页的PDF报告,总结关键信息""
+- [ ] **数据处理**: ""处理这个Excel表格,生成统计报告""",5
+P0-核心,FR-TOOL-005 call_agent工具 - 跨类型Agent调用,"系统应支持跨类型Agent调用,允许GeneralAgent调用SimpleAgent或其他专用Agent。
+
+
+验收标准:
+- 能调用AgentRegistry中注册的任何Agent
+- 返回结果通过Command更新父状态
+- 调用失败时有明确错误信息
+- 支持超时控制","工具系统,服务端",,,"- [ ] **代码分析**: 调用CodeAgent分析代码质量
+- [ ] **快速查询**: 调用SimpleAgent处理简单问答
+- [ ] **专业任务**: 调用领域专用Agent(如FinanceAgent)",3
+P0-核心,FR-TOOL-006 ask_human工具 - 人机交互,"系统应支持Agent主动请求用户信息,实现人机协同和交互式工作流。
+
+
+验收标准:
+- interrupt触发后Agent执行暂停
+- 用户输入后Agent从暂停点恢复
+- 支持默认值(用户可直接回车使用)
+- required=False时允许空输入
+- 用户输入作为ToolMessage返回给Agent","工具系统,服务端",,,"- [ ] **缺少信息**: ""您希望报告以什么格式输出?(PDF/Word/Markdown)""
+- [ ] **确认决策**: ""即将删除10个文件,是否继续?""
+- [ ] **多选项**: ""找到3个可能的解决方案,您选择哪一个?""
+- [ ] **用户偏好**: ""您偏好使用哪个模型?(GPT-4/Claude/Gemini)""",5
+P0-核心,FR-TOOL-007 read_file工具 - 多格式文件读取,"系统应支持读取多种格式文件,自动检测格式并提取内容,为Agent提供文件访问能力。
+
+
+验收标准:
+- 所有支持格式能正确提取内容
+- 大文件返回预览而非完整内容
+- 错误信息清晰(如""文件不存在""、""格式不支持"")
+- 路径必须在workspace内(安全检查)","工具系统,服务端",,,"- [ ] **阅读代码**: `read_file(""src/main.py"")`
+- [ ] **查看报告**: `read_file(""uploads/annual_report.pdf"")`
+- [ ] **检查配置**: `read_file(""config.yaml"")`
+- [ ] **阅读技能文档**: `read_file(""skills/pdf/SKILL.md"")`",3
+P0-核心,FR-TOOL-008 write_file工具 - 文件创建,"系统应支持在workspace中创建新文件,遵循""框架优先、内容后补""的最佳实践。
+
+
+验收标准:
+- 只能写入outputs/、temp/、uploads/目录
+- 路径traversal攻击被拦截(如`../../etc/passwd`)
+- 文件创建成功返回文件路径
+- SystemMessage和工具docstring都强调最佳实践","工具系统,服务端",,,"- [ ] write_file 创建框架(使用 [TBD] 标记待完成部分)
+- [ ] edit_file 逐节展开内容
+- [ ] 直接使用 edit_file 修改
+- [ ] **生成报告**: 创建Markdown/PDF报告
+- [ ] **保存结果**: 保存分析结果为JSON",5
+P0-核心,FR-TOOL-009 edit_file工具 - 精确文件编辑,"系统应支持精确的字符串替换编辑,实现token高效的文件修改。
+
+
+验收标准:
+- old_string不唯一时返回错误(除非replace_all)
+- 文件不存在时返回错误
+- 路径必须在workspace内
+- 替换成功返回成功消息","工具系统,服务端",,,"- [ ] **展开框架**: 将[TBD]替换为实际内容
+- [ ] **修复错误**: 替换代码中的bug
+- [ ] **更新配置**: 修改配置文件参数
+- [ ] **重命名**: 全局替换变量名(replace_all=True)",3
+P0-核心,FR-TOOL-010 find_files工具 - 文件名搜索,"系统应支持基于glob模式的文件名快速搜索,帮助Agent定位文件。
+
+
+验收标准:
+- 支持标准glob模式语法
+- 递归搜索正常工作
+- 搜索范围限制在workspace内
+- 返回相对路径(workspace相对)
+- 搜索时间<10ms","工具系统,服务端",,,"- [ ] **定位上传文件**: 用户说""处理那个PDF"",Agent搜索`*.pdf`
+- [ ] **查找脚本**: 查找技能包中的Python脚本
+- [ ] **批量操作**: 找到所有Markdown文件进行处理
+- [ ] **文件整理**: 列出outputs/目录下的所有生成文件",5
+P0-核心,FR-TOOL-011 search_file工具 - 文件内容搜索,"系统应支持文件内容全文搜索,使用SQLite FTS5索引实现高性能搜索,支持中文分词。
+
+
+验收标准:
+- 首次搜索自动建立索引
+- 后续搜索响应时间<100ms
+- 中文分词准确(识别""营收""而非""营""+""收"")
+- 短语匹配优先级高于单词匹配
+- 相同文件不重复索引(MD5去重)
+- 返回结果包含片段内容和位置(页码/行号)","工具系统,服务端",,,"- [ ] **关键词搜索**: ""找到报告中所有提到'Q3营收'的地方""
+- [ ] **问题定位**: ""搜索错误日志中的'OutOfMemory'""
+- [ ] **数据查找**: ""在Excel中搜索'客户流失率'""
+- [ ] **文档分析**: ""找出PDF中所有关于'风险评估'的段落""",5
+P0-核心,FR-TOOL-012 list_workspace_files工具 - 目录列表,"系统应支持列出workspace目录内容,帮助Agent了解可用文件。
+
+
+验收标准:
+- 显示文件大小(人类可读格式)
+- 区分文件和目录
+- 路径必须在workspace内
+- 响应时间<100ms","工具系统,服务端",,,"- [ ] **文件盘点**: ""列出我上传了哪些文件""
+- [ ] **查看技能**: ""看看pdf技能包含哪些脚本""
+- [ ] **检查输出**: ""已经生成了哪些文件?""
+- [ ] **清理准备**: ""temp目录里有什么临时文件?""",3
+P0-核心,FR-TOOL-013 fetch_web工具 - 网页内容获取,"系统应支持获取网页内容并转换为LLM友好的Markdown格式。
+
+
+验收标准:
+- 成功获取主流网站内容
+- Markdown格式正确(标题、列表、代码块)
+- 广告和导航被过滤
+- 代码块保留语言标记
+- 错误信息清晰友好","工具系统,服务端",,,"- [ ] **获取文档**: ""获取Python官方文档关于新特性的页面""
+- [ ] **新闻阅读**: ""获取这篇技术新闻的内容""
+- [ ] **教程学习**: ""下载这个教程页面以便离线阅读""
+- [ ] **API文档**: ""获取这个API的文档页面""",5
+P0-核心,FR-TOOL-014 search_web工具 - 网络搜索,"系统应支持网络搜索,返回LLM优化的搜索结果,支持并行内容清洗。
+
+
+验收标准:
+- 返回num_results个结果
+- 每个结果包含title、snippet、url
+- 并行清洗正常工作
+- 单个清洗失败不影响其他
+- 总时间≈max(单个清洗时间)","工具系统,服务端",,,"- [ ] **快速调研**: ""搜索Python 3.13的主要新特性""
+- [ ] **问题解决**: ""搜索如何解决Docker容器启动失败""
+- [ ] **资料收集**: ""搜索关于Agent架构的最佳实践""
+- [ ] **新闻查询**: ""搜索最新的AI行业动态""",5
+P0-核心,FR-TOOL-015 run_bash_command工具 - Bash命令执行,"系统应支持在workspace中执行bash命令和Python脚本,用于运行技能包脚本和系统操作。
+- Windows 平台使用命令行
+
+
+验收标准:
+- 危险命令触发HITL审批
+- 安全命令(ls/pwd/cat)自动通过
+- Timeout正常工作
+- 环境变量AGENT_WORKSPACE_PATH正确设置
+- 捕获完整的stdout和stderr","工具系统,服务端",,,"- [ ] **运行技能脚本**:
+- [ ] **文件操作**:
+- [ ] **数据处理**:
+- [ ] **系统检查**:",5
+P0-核心,FR-TOOL-016 compact_context工具 - 手动压缩上下文,"系统应支持手动触发上下文压缩,在Token使用率达到阈值时可动态加载。
+
+
+验收标准:
+- 默认不加载(enabled: false)
+- Token>75%时提醒可用
+- @mention后成功加载
+- compact策略正常工作
+- truncate策略正常工作
+- 压缩后Token使用率<10%","工具系统,服务端",,,"- [ ] **预防性压缩**: Token使用率达到75%时主动压缩
+- [ ] **紧急压缩**: 接近上限时快速释放空间
+- [ ] **测试压缩**: 开发时测试压缩效果",5
+P0-核心,5.1 ask_human 工具(Agent 主动请求),"提供 ask_human 工具,允许 Agent 在需要额外信息时主动向用户提问。
+
+
+验收标准:
+- 支持问题、上下文、默认值、必填标志
+- 使用 interrupt() 暂停 Graph 执行
+- 用户答案记录在对话历史(ToolMessage)
+- 支持超时(默认 60s,可配置)
+
+
+代码位置: generalAgent/tools/builtin/ask_human.py","HITL,服务端",,,"- [ ] Agent 调用 ask_human 工具
+- [ ] 系统调用 interrupt() 暂停执行
+- [ ] CLI 显示问题给用户
+- [ ] 用户输入答案
+- [ ] 系统恢复执行,返回 ToolMessage(content=用户答案)",5
+P0-核心,5.2 四层审批规则架构,"实现四层审批规则检测系统,从高到低优先级为:自定义检查器 → 全局模式 → 工具规则 → 内置规则。
+
+
+验收标准:
+- 支持四层规则,优先级正确
+- 每层可独立启用/禁用
+- 返回清晰的 ApprovalDecision
+- 支持正则表达式模式匹配
+
+
+代码位置: generalAgent/hitl/approval_checker.py","HITL,服务端",,,"- [ ] 工具自定义检查器(Python 代码)
+- [ ] 全局风险模式(hitl_rules.yaml:global.risk_patterns)
+- [ ] 工具特定规则(hitl_rules.yaml:tools.xxx)
+- [ ] 内置默认规则(ApprovalChecker._check_builtin_rules)",3
+P0-核心,5.3 全局风险模式检测,"实现跨工具的全局风险模式检测,在所有工具执行前统一检查敏感信息、系统文件等高风险内容。
+
+
+验收标准:
+- 支持 critical/high/medium/low 四级风险
+- 正则表达式模式匹配(不区分大小写)
+- 优先级高于工具特定规则
+- 可配置 action(require_approval/allow/deny)
+
+
+代码位置: generalAgent/hitl/approval_checker.py:_check_global_patterns","HITL,服务端",,,,3
+P0-核心,5.4 工具特定审批规则,"为特定工具配置专用审批规则,支持多风险级别、自定义模式、灵活动作控制。
+
+
+验收标准:
+- 支持多风险级别(high_risk/medium_risk/low_risk)
+- 支持正则表达式模式
+- 支持自定义 reason
+- 可通过 enabled: false 临时禁用
+
+
+代码位置: generalAgent/config/hitl_rules.yaml","HITL,服务端",,,,3
+P0-核心,5.5 自定义检查器(代码实现),"支持通过 Python 代码注册自定义审批检查器,实现复杂的审批逻辑(如调用外部 API、多条件判断)。
+
+
+验收标准:
+- 支持注册任意工具的检查器
+- 检查器优先级最高(第一层)
+- 检查器可访问完整的 args 字典
+- 支持异步检查器(async def)
+
+
+代码位置: generalAgent/hitl/approval_checker.py:register_checker","HITL,服务端",,,,3
+P0-核心,5.6 ApprovalToolNode(审批拦截节点),"实现 ApprovalToolNode,包装 LangGraph 的 ToolNode,在工具执行前拦截并检查审批需求。
+
+
+验收标准:
+- 审批过程对 LLM 完全透明
+- 支持多个 tool_calls 批量检查
+- 拒绝消息以 ToolMessage 形式返回
+- 可通过 enable_approval=False 临时关闭
+
+
+代码位置: generalAgent/hitl/approval_node.py","HITL,服务端",,,,3
+P0-核心,5.7 内置默认规则,"提供常见危险操作的内置规则作为兜底逻辑,当配置文件未覆盖时自动生效。
+
+
+验收标准:
+- 覆盖常见危险操作(rm -rf, sudo, chmod 777)
+- 检测网络操作(curl, wget)
+- 检测内网地址访问
+- 配置文件规则优先级高于内置规则
+
+
+代码位置: generalAgent/hitl/approval_checker.py:_check_builtin_rules","HITL,客户端",,,,3
+P0-核心,6.1 Token监控与三级阈值,"实现Token使用率监控,根据三级阈值(info/warning/critical)触发不同响应策略。
+
+
+验收标准:
+- 支持三级阈值配置(0.6-0.99)
+- 实时计算usage_ratio
+- 根据阈值返回正确的ContextStatus
+- 记录完整的Token追踪日志
+
+
+代码位置: generalAgent/context/token_tracker.py","上下文管理,服务端",,,,3
+P0-核心,6.2 自动上下文压缩,"Token使用率>95%时自动触发LLM压缩,将旧消息总结为摘要,保留最近对话。
+
+
+验收标准:
+- Token使用率>95%时自动触发
+- 保留最近15% context window的消息(或至少10条)
+- LLM压缩失败时回退到紧急截断
+- 用户无感知(无通知消息)
+- 压缩后正确重置Token计数器
+
+
+代码位置: generalAgent/context/compressor.py","上下文管理,服务端",,,"- [ ] 确定保留消息数量(keep_recent_ratio=15% 或 keep_recent_messages=10)
+- [ ] 分离消息:
+- [ ] 调用LLM压缩:
+- [ ] 重组消息:
+- [ ] 重置Token计数器",5
+P0-核心,6.3 会话持久化,"支持会话状态的保存和恢复,使用SQLite Checkpointer存储完整对话历史。
+
+
+验收标准:
+- 会话状态100%恢复(消息、工具、技能)
+- 支持至少1000个并发会话
+- 恢复时间<500ms
+- 支持前缀匹配加载(`/load abc`)
+- 自动保存(每轮对话后)
+
+
+代码位置: shared/session/store.py","上下文管理,服务端",,,"- [ ] abc123  (2025-10-30 14:23)
+- [ ] def456  (2025-10-31 09:15)",5
+P0-核心,6.4 消息历史清理,"自动清理无效消息,确保OpenAI API兼容性,避免因未响应的tool_calls导致错误。
+
+
+验收标准:
+- 清理未响应的tool_calls(避免OpenAI API错误)
+- 截断时保留AIMessage-ToolMessage对
+- 始终保留SystemMessage
+- 可配置截断阈值(MAX_MESSAGE_HISTORY)
+
+
+代码位置: generalAgent/graph/message_utils.py","上下文管理,服务端",,,,3
+P0-核心,6.5 KV Cache优化,"优化SystemMessage和提醒机制,最大化KV Cache复用率,降低推理成本60-80%。
+
+
+验收标准:
+- SystemMessage在会话期间固定不变
+- 时间戳精度为分钟级(HH:MM UTC)
+- 动态提醒追加到最后一条HumanMessage
+- 多轮对话中KV Cache复用率≥70%
+
+
+代码位置: generalAgent/graph/nodes/planner.py:86-107","上下文管理,服务端",,,,3
+P1-重要,7.1 五种模型槽位定义,"五种模型槽位定义
+
+
+验收标准:
+- 五种槽位均可独立配置model_id、api_key、base_url
+- 每个槽位支持context_window和max_completion_tokens配置
+- 支持多种别名(如MODEL_BASIC_*/MODEL_BASE_*均可)
+- 缺少API Key时抛出清晰错误提示","模型路由,服务端",,,,3
+P1-重要,7.2 ModelSpec模型规格定义,"ModelSpec模型规格定义
+
+
+验收标准:
+- ModelSpec为frozen dataclass(不可变)
+- 包含8个字段,涵盖模型所有关键属性
+- 支持通过ModelRegistry.get(key)查询
+- 用于ModelRegistry路由决策","模型路由,服务端",,,,3
+P1-重要,7.3 ModelRegistry注册与路由,"ModelRegistry注册与路由
+
+
+验收标准:
+- 图片输入自动触发vision模型
+- 代码任务自动选择code模型
+- 支持preference参数覆盖默认选择
+- 路由逻辑稳定可预测","模型路由,服务端",,,,3
+P1-重要,7.4 ModelResolver模型实例化,"ModelResolver模型实例化
+
+
+验收标准:
+- 支持自定义base_url(OpenAI-compatible API)
+- 缺少API Key时抛出RuntimeError并给出清晰提示
+- 支持model_id不在配置中时的KeyError
+- 惰性实例化(仅在调用时创建对象)","模型路由,服务端",,,"- [ ] `resolve_model_configs(settings)` - 从.env提取五个槽位配置
+- [ ] `build_model_resolver(configs)` - 构建resolver函数
+- [ ] 返回resolver:根据model_id创建ChatOpenAI实例",3
+P1-重要,7.5 自动多模态检测,"自动多模态检测
+
+
+验收标准:
+- 检测最近3条消息(覆盖用户输入+Agent响应周期)
+- 支持image和image_url两种格式
+- 检测结果直接传递给invoke_planner()
+- Vision优先策略在路由中生效","模型路由,服务端",,,,3
+P1-重要,7.6 invoke_planner统一调用接口,"invoke_planner统一调用接口
+
+
+验收标准:
+- 所有模型调用统一经过此接口
+- 自动处理模型选择和实例化
+- 支持异步调用(async/await)
+- 返回标准AIMessage格式","模型路由,服务端",,,"- [ ] 调用`model_registry.prefer()`获取ModelSpec
+- [ ] 使用`model_resolver(spec.model_id)`创建模型实例
+- [ ] 绑定工具:`model.bind_tools(list(tools))`
+- [ ] 调用模型:`await runnable.ainvoke(messages)`
+- [ ] 返回AIMessage(包含tool_calls)",5
+P1-重要,7.7 Subagent模型继承,"Subagent模型继承
+
+
+验收标准:
+- Subagent与主Agent使用相同的模型配置
+- 支持need_code和need_vision参数
+- 不支持preference参数
+- Phase标记为""delegate""便于观测","模型路由,服务端",,,,3
+P1-重要,8.1 delegate_task工具(同类型副本),"delegate_task工具(同类型副本)
+
+
+验收标准:
+- Subagent看不到主对话历史(独立上下文)
+- Subagent可以使用主Agent @mentioned的工具
+- Subagent可以访问主Agent的工作区文件
+- 支持实时流式输出(用户可见进度)
+- 返回JSON包含ok/result/loops字段","Multi-Agent,服务端",,,"- [ ] 生成唯一context_id: `subagent-{uuid[:8]}`
+- [ ] 从parent_state_store获取父状态
+- [ ] 继承父Agent状态:
+- [ ] 创建独立delegated_state:
+- [ ] 调用app_graph.astream()执行subagent",5
+P1-重要,8.2 call_agent工具(跨类型调用),"call_agent工具(跨类型调用)
+
+
+验收标准:
+- 支持调用SimpleAgent和GeneralAgent
+- Agent不存在时返回清晰错误提示
+- 支持SimpleAgent的template/tools参数
+- 返回Command对象更新父状态
+- 支持@mention动态加载agent","Multi-Agent,服务端",,,"- [ ] 检查agent_registry是否初始化
+- [ ] 验证agent_id是否存在
+- [ ] 检查agent是否enabled或通过@mention激活
+- [ ] 根据agent类型调用对应工厂:
+- [ ] 返回Command对象:",5
+P1-重要,8.3 Agent Card标准(A2A Protocol),"Agent Card标准(A2A Protocol)
+
+
+验收标准:
+- AgentCard包含完整的identity/endpoint/capabilities/skills信息
+- Skills包含examples和parameters便于LLM理解
+- 支持从agents.yaml自动加载AgentCard
+- AgentRegistry提供查询接口(by id/skill/tag)","Multi-Agent,服务端",,,,3
+P1-重要,8.4 AgentRegistry注册表,"AgentRegistry注册表
+
+
+验收标准:
+- 支持三层架构:discovered → enabled → mentioned
+- Catalog默认精简模式(减少SystemMessage tokens)
+- @mention时动态显示详细技能信息
+- 支持by_skill/by_tag查询","Multi-Agent,服务端",,,"- [ ] quick_analysis - 快速分析单个文件
+- [ ] reasoning_task - 使用推理模型解决数学/逻辑问题",3
+P1-重要,8.5 Handoff Pattern实现,"Handoff Pattern实现
+
+
+验收标准:
+- 每个enabled agent自动生成transfer_to工具
+- @mention时动态加载transfer_to工具
+- 工具描述包含agent的能力和技能
+- 返回Command对象更新父状态","Multi-Agent,服务端",,,"- [ ] **用户显式@mention**:
+- [ ] **LLM自主选择**:",3
+P1-重要,8.6 上下文隔离与继承,"上下文隔离与继承
+
+
+验收标准:
+- Subagent看不到主对话历史(messages独立)
+- Subagent可以使用主Agent的工具(@mentioned)
+- Subagent可以访问主Agent的工作区
+- 支持context_id追踪调用链","Multi-Agent,服务端",,,,3
+P1-重要,8.7 流式输出与进度可见,"流式输出与进度可见
+
+
+验收标准:
+- Subagent每条消息实时打印
+- 显示context_id便于追踪
+- 显示loop计数和完成状态
+- 长内容自动截断(前200字符)","Multi-Agent,服务端",,,,3

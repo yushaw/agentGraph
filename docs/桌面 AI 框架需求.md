@@ -39,6 +39,7 @@ version: v3.6
 
 ---
 
+
 # 1. 产品架构
 
 ## 核心价值
@@ -608,508 +609,650 @@ Agent使用工具
 
 ---
 
-# 15. 快速开始
+# 2. Agent 流程与状态管理
 
-## 5分钟上手
+### 产品定位
 
-**1. 安装依赖**
-```bash
-# Python 3.12+
-uv sync
-# 或: pip install -e .
+Agent 流程与状态管理是框架的核心执行引擎，基于 **Agent Loop 架构**（ReAct 模式）实现 LLM 自主决策的多轮对话流程。系统通过状态管理追踪会话上下文、工具调用、任务进度，并提供自动上下文压缩机制应对长对话场景。
+
+**价值主张**：
+- **自主决策**：LLM 自主选择工具调用或结束对话，无需人工预定义执行流程
+- **状态隔离**：支持主 Agent 与 Subagent 上下文隔离，防止状态污染
+- **自动优化**：Token 使用率超过 95% 时自动压缩历史，无需用户干预
+- **可观测性**：完整的 Loop 计数、Token 追踪、节点日志，便于调试和优化
+
+---
+
+### 核心场景
+
+#### 场景 1：多轮研究任务
+
+**用户故事**：
+用户要求 "研究 Python 3.13 的新特性并生成对比报告"，Agent 需要：
+1. 搜索官方文档
+2. 提取关键特性
+3. 对比旧版本
+4. 生成 Markdown 报告
+5. 保存到 outputs/ 目录
+
+**系统行为**：
+- Planner 节点决定调用 search_web 工具
+- Tools 节点执行搜索，返回结果
+- Planner 节点分析结果，决定调用 read_file
+- 循环直到生成报告
+- Finalize 节点格式化最终输出
+
+**关键点**：
+- 最多执行 100 个 Loop（可配置）
+- 每次 Loop 累计 Token 使用
+- 自动检测 Token 使用率
+
+---
+
+#### 场景 2：长对话自动压缩
+
+**用户故事**：
+用户与 Agent 进行 300 轮对话（约 120K tokens），系统需要在不中断对话的情况下释放 Token 空间。
+
+**系统行为**：
+1. Planner 节点检测 Token 使用率达到 95%
+2. 自动路由到 Summarization 节点
+3. LLM 将前 290 条消息压缩为 1 条摘要
+4. 保留最近 10 条消息
+5. 返回 Planner 节点继续执行
+
+**关键点**：
+- 用户无感知（无压缩通知）
+- 保留最近对话上下文（默认保留 15% context window）
+- 支持 LLM 压缩和紧急截断两种策略
+
+---
+
+#### 场景 3：Subagent 状态隔离
+
+**用户故事**：
+用户在主 Agent 中调用 delegate_task 将子任务分配给 Subagent，需要确保 Subagent 不干扰主 Agent 的状态。
+
+**系统行为**：
+- Subagent 创建独立的 AppState 实例
+- `context_id` 设置为 `subagent-{uuid}`
+- `parent_context` 指向主 Agent 的 `context_id`
+- 继承工具、技能、工作区路径
+- 不继承消息历史
+- 完成后将结果返回主 Agent
+
+**关键点**：
+- 状态隔离防止污染
+- 工具和工作区继承提高效率
+- 支持嵌套调用（最大深度 3 层）
+
+---
+
+### 功能需求
+
+#### 需求 1：Agent Loop 架构
+
+**需求描述**：
+实现基于 LangGraph 的 Agent Loop 架构（ReAct 模式），支持 LLM 自主决策的多轮对话流程。
+
+**流程图**：
+
+```
+START → agent ⇄ tools → agent ⇄ ... → finalize → END
+          ↑      ↓
+          ↑ summarization (auto-compress when >95% tokens)
+          ↑______↓
 ```
 
-**2. 启动应用**
-```bash
-uv run main.py
-```
+**节点定义**：
 
-**3. 第一次对话**
-```
-User> 你好,请介绍一下你的能力
-Agent> [介绍工具和技能]
+| 节点 | 功能 | 输入 | 输出 | 下一步 |
+|------|------|------|------|--------|
+| agent (Planner) | LLM 推理，决策工具调用 | 消息历史 + 可见工具 | AIMessage (with/without tool_calls) | tools / finalize / summarization |
+| tools | 执行工具调用 | tool_calls | ToolMessage[] | agent |
+| summarization | 压缩消息历史 | 消息历史 | 压缩后消息 | agent |
+| finalize | 格式化最终输出 | 消息历史 | 最终 AIMessage | END |
 
-User> @pdf 帮我填写这个表单
-Agent> [加载PDF技能,执行任务]
-```
+**路由逻辑**：
 
-### 开发第一个工具
-
-**创建自定义工具** (5分钟):
 ```python
-# generalAgent/tools/custom/my_tool.py
-from langchain_core.tools import tool
+# generalAgent/graph/routing.py:agent_route()
+def agent_route(state: AppState):
+    # 1. 检查 Loop 限制
+    if loops >= max_loops:
+        return "finalize"
 
-@tool
-def my_custom_tool(query: str) -> str:
-    """你的工具描述"""
-    return f"处理结果: {query}"
+    # 2. 检查 Token 使用率（>95% 触发压缩）
+    if needs_compression and not auto_compressed:
+        return "summarization"
+
+    # 3. 检查工具调用
+    if last_message.tool_calls:
+        return "tools"
+    else:
+        return "finalize"
 ```
 
-**配置工具**:
-```yaml
-# generalAgent/config/tools.yaml
-optional:
-  my_custom_tool:
-    enabled: true
-    category: "custom"
-    tags: ["custom"]
-```
+**验收标准**：
+- ✅ 支持最大 100 Loop（可配置 1-500）
+- ✅ Token 使用率 >95% 时自动路由到 summarization
+- ✅ LLM 决定无需工具时自动结束
+- ✅ Loop 限制触发时强制 finalize
 
-### 开发第一个技能
-
-**创建技能目录** (10分钟):
-```bash
-mkdir -p skills/my_skill
-cd skills/my_skill
-```
-
-**创建SKILL.md**:
-```markdown
-# My Skill
-
-## 功能
-描述技能的功能和使用方法
-
-## 使用步骤
-1. 步骤1
-2. 步骤2
-```
-
-**配置技能**:
-```yaml
-# generalAgent/config/skills.yaml
-optional:
-  my_skill:
-    enabled: true
-    description: "我的自定义技能"
-```
----
-
-# 14. Prompt清单
-
-## 产品定位
-
-Prompt清单章节汇总框架中所有与LLM交互的提示词,包括Agent系统提示、工具描述、技能文档模板、动态提醒和HITL交互界面,为产品经理、开发者和维护者提供完整的提示词管理参考。
-
-本章节不是实现细节,而是**Prompt资产目录**,说明"系统有哪些Prompt"和"每个Prompt的作用和位置"。
-
-### 核心价值
-
-1. **全局视图** - 一站式查看所有Prompt资源
-2. **维护指南** - 快速定位和修改Prompt
-3. **质量保证** - 确保Prompt的一致性和准确性
-4. **成本优化** - 识别冗长Prompt,优化Token消耗
+**实现参考**：`generalAgent/graph/builder.py`、`generalAgent/graph/routing.py`
 
 ---
 
-## Prompt分类总览
+#### 需求 2：状态定义（AppState）
 
-框架中的Prompt分为**5大类**:
+**需求描述**：
+定义完整的会话状态结构，包含消息历史、工具状态、任务追踪、上下文隔离、Token 追踪等所有必要信息。
 
-```
-Prompt清单
-├── 1. Agent系统提示 (System Prompts)
-│   ├── PLANNER_SYSTEM_PROMPT (主Agent)
-│   └── SUBAGENT_SYSTEM_PROMPT (子Agent)
-│
-├── 2. 工具描述 (Tool Descriptions)
-│   ├── Core工具 (6个)
-│   ├── Optional工具 (12个)
-│   └── MCP工具 (外部)
-│
-├── 3. 技能文档模板 (Skill Templates)
-│   ├── SKILL.md结构模板
-│   └── 6个内置技能的SKILL.md
-│
-├── 4. 动态提醒 (Dynamic Reminders)
-│   ├── TODO列表提醒
-│   ├── @mention加载提醒
-│   ├── 文件上传提醒
-│   └── 上下文压缩提醒
-│
-└── 5. HITL交互界面 (HITL UI)
-    ├── ask_human提问界面
-    └── 工具审批界面
-```
+**状态字段**：
 
-**统计数据**:
-- **总Prompt数**: ~30个
-- **最大Prompt**: PLANNER_SYSTEM_PROMPT (~8000 tokens)
-- **最小Prompt**: now工具描述 (~50 tokens)
-- **总Token消耗**: ~15K tokens/轮 (包含工具描述)
-
----
-
-## 1. Agent系统提示
-
-### 1.1 PLANNER_SYSTEM_PROMPT (主Agent)
-
-**用途**: GeneralAgent的核心系统提示,定义Agent身份、能力、工作流程和约束
-
-**位置**: `generalAgent/graph/prompts.py:PLANNER_SYSTEM_PROMPT`
-
-**结构**:
-```
-1. 身份定义 (~200 tokens)
-   - 你是GeneralAgent
-
-2. 核心能力 (~500 tokens)
-   - 工具调用
-   - 技能使用
-   - 文件操作
-   - 多模态处理
-
-3. 工作流程 (~800 tokens)
-   - Agent Loop步骤
-   - 工具可见性规则
-   - 技能加载流程
-   - delegate_task使用场景
-
-4. 技能目录 (~2000 tokens, 动态生成)
-   - enabled技能列表
-   - 每个技能的描述和用途
-   - 自动加载规则
-
-5. 约束和最佳实践 (~500 tokens)
-   - 不要使用不存在的工具
-   - 总是使用read_file读取SKILL.md
-   - 委派任务时给出详细描述
-
-6. 时间戳 (~50 tokens, 分钟级)
-   <current_datetime>2025-10-31 20:00 UTC</current_datetime>
-```
-
-**Token估算**:
-- 固定部分: ~4000 tokens
-- 技能目录: ~2000 tokens (6个技能)
-- **总计**: ~6000 tokens (会话期间不变, KV Cache友好)
-
-**关键设计**:
-- ✅ **固定内容**: 系统提示在会话初始化时生成,之后不变
-- ✅ **技能目录过滤**: 只包含`enabled: true`的技能
-
-**参考代码**: `generalAgent/graph/prompts.py:19-150`
-
----
-
-### 1.2 SUBAGENT_SYSTEM_PROMPT (子Agent)
-
-**用途**: delegate_task创建的子Agent的系统提示,专注于单一任务执行
-
-**位置**: `generalAgent/graph/prompts.py:SUBAGENT_SYSTEM_PROMPT`
-
-**结构**:
-```
-1. 身份定义 (~150 tokens)
-   - 你是Subagent
-   - 由MainAgent委派特定任务
-
-2. 上下文说明 (~200 tokens)
-   - 你看不到主对话历史
-   - 只能看到任务描述
-
-3. 工作要求 (~300 tokens)
-   - 专注完成当前任务
-   - 生成详细总结(>200字符)
-   - 包含:做了什么、发现了什么、结果是什么
-
-4. 时间戳 (~50 tokens)
-   <current_datetime>2025-10-31 20:00 UTC</current_datetime>
-```
-
-**参考代码**: `generalAgent/graph/prompts.py:152-180`
-
----
-
-## 2. 工具描述
-
-所有工具的描述通过LangChain的`@tool`装饰器自动生成,包含工具名称、参数说明和使用示例。
-
-**Core工具** (6个,始终可见):
-- FR-PROMPT-001: now - 获取当前UTC时间
-- FR-PROMPT-002: todo_write - 创建和更新TODO列表
-- FR-PROMPT-003: todo_read - 读取TODO列表
-- FR-PROMPT-004: delegate_task - 委派任务给子Agent
-- FR-PROMPT-005: call_agent - 调用其他类型的Agent
-- FR-PROMPT-006: ask_human - 向用户提问
-
-**Optional工具** (10个,可选加载):
-- FR-PROMPT-007: read_file - 读取文件内容
-- FR-PROMPT-008: write_file - 写入文件
-- FR-PROMPT-009: edit_file - 精确编辑文件
-- FR-PROMPT-010: find_files - 按名称查找文件
-- FR-PROMPT-011: search_file - 搜索文件内容
-- FR-PROMPT-012: list_workspace_files - 列出工作区文件
-- FR-PROMPT-013: fetch_web - 获取网页内容
-- FR-PROMPT-014: search_web - 搜索网页
-- FR-PROMPT-015: run_bash_command - 执行bash命令
-- FR-PROMPT-016: compact_context - 手动压缩上下文
-
-**工具描述示例** (now工具):
 ```python
-"""Get current UTC time in ISO 8601 format.
+# generalAgent/graph/state.py:AppState
+class AppState(TypedDict, total=False):
+    # ========== 消息与多媒体 ==========
+    messages: List[BaseMessage]  # LangChain 消息列表（累加器）
+    images: List[Any]  # 图片列表
 
-Returns:
-    str: Current UTC time (e.g., "2025-10-31T20:00:00Z")
+    # ========== 技能与工具 ==========
+    active_skill: Optional[str]  # 当前激活的技能 ID
+    allowed_tools: List[str]  # 技能允许使用的工具列表
+    mentioned_agents: List[str]  # 历史 @mention 记录
+    new_mentioned_agents: List[str]  # 本轮新增 @mention（用于提醒）
+    persistent_tools: List[str]  # 持久化工具（始终可用）
 
-Example:
-    now() -> "2025-10-31T20:00:00Z"
+    # ========== 任务追踪 ==========
+    todos: List[dict]  # 任务列表（TodoWrite 工具管理）
+
+    # ========== 上下文隔离 ==========
+    context_id: str  # "main" 或 "subagent-{uuid}"
+    parent_context: Optional[str]  # 父上下文 ID（仅 Subagent）
+
+    # ========== 执行控制 ==========
+    loops: int  # 全局 Loop 计数器
+    max_loops: int  # Loop 上限（默认 100）
+
+    # ========== 模型偏好 ==========
+    model_pref: Optional[str]  # 用户指定模型类型（vision/code/...）
+
+    # ========== 会话上下文 ==========
+    thread_id: Optional[str]  # 会话 ID（用于持久化）
+    user_id: Optional[str]  # 用户 ID（未来扩展）
+    workspace_path: Optional[str]  # 工作区路径
+    uploaded_files: List[Any]  # 上传文件列表（历史记录）
+    new_uploaded_files: List[Any]  # 本轮新上传文件（用于提醒）
+
+    # ========== Agent 系统 ==========
+    agent_call_stack: List[str]  # 调用栈（检测循环）
+    agent_call_history: List[str]  # 调用历史（审计）
+    current_agent: Optional[str]  # 当前活跃 Agent
+
+    # ========== Token 追踪与压缩 ==========
+    cumulative_prompt_tokens: int  # 当前上下文大小（tokens）
+    cumulative_completion_tokens: int  # 累计输出 tokens
+    last_prompt_tokens: int  # 上次调用的 prompt tokens
+    compact_count: int  # 压缩次数
+    last_compact_strategy: Optional[str]  # 上次压缩策略
+    last_compression_ratio: Optional[float]  # 上次压缩比
+    auto_compressed_this_request: bool  # 本轮是否已压缩
+    needs_compression: bool  # 是否需要压缩（路由标志）
+```
+
+**字段分类**：
+
+| 类别 | 字段数 | 用途 |
+|------|--------|------|
+| 消息管理 | 2 | 对话历史、图片 |
+| 工具/技能 | 5 | 动态加载、权限控制 |
+| 任务追踪 | 1 | TodoWrite 工具 |
+| 上下文隔离 | 2 | 主 Agent / Subagent 隔离 |
+| 执行控制 | 2 | Loop 限制 |
+| 会话上下文 | 5 | 持久化、工作区 |
+| Agent 系统 | 3 | Multi-Agent 协作 |
+| Token 管理 | 9 | 自动压缩 |
+
+**验收标准**：
+- ✅ 支持 LangChain 消息累加器（`add_messages`）
+- ✅ 支持主 Agent 和 Subagent 状态隔离
+- ✅ 支持 Token 追踪和压缩标志位
+- ✅ 所有字段类型正确，支持 TypedDict 类型检查
+
+**实现参考**：`generalAgent/graph/state.py`
+
+---
+
+#### 需求 3：Planner 节点
+
+**需求描述**：
+实现 Planner 节点（agent 节点），负责 LLM 推理、工具可见性控制、动态提醒生成、Token 监控。
+
+**核心逻辑**：
+
+```
+1. 收集可见工具（persistent + @mentioned）
+2. 检测多模态输入（图片/代码）
+3. 构建 SystemMessage（静态，KV Cache 优化）
+4. 构建动态提醒（技能、工具、TODO、文件上传）
+5. 追加提醒到最后一条 HumanMessage
+6. 调用 LLM（model_registry + model_resolver）
+7. 提取 Token 使用信息
+8. 检查 Token 使用率（>95% 设置 needs_compression 标志）
+9. 返回 AIMessage + 更新状态
+```
+
+**SystemMessage 结构**（KV Cache 优化）：
+
+```
+[固定内容 - 系统指令]
+[技能目录 - 启用的技能列表]
+[Agent 目录 - 启用的 Agent 列表]
+[时间戳 - 分钟级精度，启动时生成一次]
+```
+
+**动态提醒追加到最后一条消息**：
+
+```
+User> 帮我分析这个 PDF
+
+[系统自动追加到 HumanMessage]
+<system_reminder>
+⚠️ 检测到上传文件: report.pdf (PDF 格式)
+建议使用 @pdf 技能处理
+</system_reminder>
+
+<system_reminder>
+⚠️ 任务追踪 (2 个未完成):
+  [进行中] 分析 PDF 文档
+  [待完成] 生成分析报告
+</system_reminder>
+```
+
+**Token 监控逻辑**：
+
+| Token 使用率 | 行为 | 日志级别 |
+|-------------|------|---------|
+| <75% | 正常执行 | INFO |
+| 75%-85% | 记录信息，动态加载 compact_context 工具 | INFO |
+| 85%-95% | 警告，添加 Token 提醒到消息 | WARNING |
+| >95% | 跳过 LLM 调用，设置 needs_compression=True | WARNING |
+
+**验收标准**：
+- ✅ SystemMessage 固定不变（KV Cache 优化）
+- ✅ 动态提醒追加到最后一条 HumanMessage
+- ✅ Token 使用率 >95% 时设置压缩标志位
+- ✅ 支持多模态输入检测（图片 → 自动选择 vision 模型）
+- ✅ 正确累加 Loop 计数器
+
+**实现参考**：`generalAgent/graph/nodes/planner.py`
+
+---
+
+#### 需求 4：Tools 节点（工具执行）
+
+**需求描述**：
+实现 Tools 节点，负责执行 LLM 生成的工具调用，并返回 ToolMessage 结果。
+
+**执行流程**：
+
+```
+1. 解析 AIMessage 中的 tool_calls
+2. 对每个 tool_call:
+   a. 从 ToolRegistry 查找工具
+   b. 如果未找到，尝试 load_on_demand()
+   c. 执行工具函数（传入参数）
+   d. 捕获异常并返回错误消息
+3. 收集所有 ToolMessage
+4. 返回到 Planner 节点（或当前 Agent）
+```
+
+**HITL 集成**（可选）：
+
+```python
+# 如果启用 ApprovalChecker，Tools 节点会检查工具调用是否需要审批
+# 示例：run_bash_command("rm -rf /") 需要用户确认
+
+tools_node = ApprovalToolNode(
+    tools=all_discovered_tools,
+    approval_checker=approval_checker,
+    enable_approval=True
+)
+```
+
+**错误处理**：
+
+| 错误类型 | ToolMessage 内容 | 日志级别 |
+|---------|----------------|---------|
+| 工具未找到 | "Error: Tool 'xxx' not found" | ERROR |
+| 参数错误 | "Error: Invalid arguments for 'xxx': ..." | WARNING |
+| 执行异常 | "Error: Tool execution failed: ..." | ERROR |
+| 需要审批被拒绝 | "Operation cancelled by user" | INFO |
+
+**验收标准**：
+- ✅ 支持并发执行多个工具调用
+- ✅ 支持工具按需加载（load_on_demand）
+- ✅ 支持 HITL 审批拦截
+- ✅ 错误消息清晰，包含工具名称和参数
+- ✅ 返回到调用方 Agent（支持 Handoff Pattern）
+
+**实现参考**：`generalAgent/graph/builder.py:105-122`、`generalAgent/hitl/approval_node.py`
+
+---
+
+#### 需求 5：Finalize 节点（最终输出）
+
+**需求描述**：
+实现 Finalize 节点，负责在 Agent Loop 结束时格式化最终输出。
+
+**触发条件**：
+- LLM 没有生成 tool_calls
+- Loop 计数器达到 max_loops
+- 最后一条消息是 ToolMessage（需要生成自然语言回复）
+
+**核心逻辑**：
+
+```
+1. 检查最后一条消息是否为 ToolMessage
+   - 如果不是，跳过 Finalize（LLM 已经生成最终回复）
+2. 清理消息历史（移除无效 tool_calls）
+3. 安全截断消息历史（保留最近 N 条，默认 40）
+4. 调用 LLM（无工具绑定）
+5. 返回最终 AIMessage
+```
+
+**SystemMessage**（简化版）：
+
+```
+你是一个智能助手。现在请根据工具执行结果，生成最终回复给用户。
+
+要求：
+- 总结工具执行结果
+- 用自然语言表达
+- 如果有错误，解释原因
+
+<current_datetime>2025-10-31 12:34 UTC</current_datetime>
+```
+
+**验收标准**：
+- ✅ 仅在最后一条消息是 ToolMessage 时执行
+- ✅ 不绑定任何工具（避免继续循环）
+- ✅ 正确处理消息历史截断
+- ✅ 生成自然语言回复
+
+**实现参考**：`generalAgent/graph/nodes/finalize.py`
+
+---
+
+#### 需求 6：Summarization 节点（自动压缩）
+
+**需求描述**：
+实现 Summarization 节点，负责在 Token 使用率超过 95% 时自动压缩消息历史。
+
+**触发条件**：
+- `needs_compression = True`（Planner 设置）
+- `auto_compressed_this_request = False`（防止重复压缩）
+- 消息数量 ≥ `min_messages_to_compress`（默认 15 条）
+
+**压缩策略**：
+
+| 策略 | 适用场景 | 保留内容 | 压缩方式 |
+|------|---------|---------|---------|
+| LLM 压缩 | 首选 | 最近 15% context window 的消息 | LLM 总结摘要 |
+| 紧急截断 | LLM 压缩失败 | 最近 100 条消息 | 直接删除旧消息 |
+
+**压缩流程**：
+
+```
+1. 检查是否需要压缩
+2. 计算保留消息数量
+   - 基于 Token 比例：context_window * keep_recent_ratio（默认 15%）
+   - 基于消息数量：keep_recent_messages（默认 10 条）
+   - 取两者中先达到的阈值
+3. 调用 LLM 压缩旧消息
+   - 提示词：请总结以下对话内容，保留关键信息...
+4. 生成压缩后消息列表
+   - [SystemMessage, 压缩摘要 AIMessage, 最近 N 条消息]
+5. 重置 Token 计数器
+6. 返回 Planner 节点继续执行
+```
+
+**用户体验**：
+- 用户**无感知**（不显示压缩通知）
+- 对话上下文保留完整语义
+- Agent 继续回答原始问题
+
+**示例**：
+
+```
+压缩前: 302 条消息（123K tokens）
+压缩后: 13 条消息（6.5K tokens）
+压缩比: 95%
+策略: LLM 压缩
+```
+
+**验收标准**：
+- ✅ Token 使用率 >95% 时自动触发
+- ✅ 保留最近 15% context window 的消息（或至少 10 条）
+- ✅ LLM 压缩失败时回退到紧急截断
+- ✅ 用户无感知（无通知消息）
+- ✅ 压缩后正确重置 Token 计数器
+
+**实现参考**：`generalAgent/graph/nodes/summarization.py`、`generalAgent/context/manager.py`
+
+---
+
+#### 需求 7：消息历史管理
+
+**需求描述**：
+提供消息历史清理和安全截断功能，确保 OpenAI API 兼容性。
+
+**清理规则**：
+
+```python
+# generalAgent/graph/message_utils.py:clean_message_history()
+# 移除未被响应的 tool_calls
+
+规则：
+- 收集所有 ToolMessage.tool_call_id
+- 遍历 AIMessage，检查其 tool_calls 是否都有对应的 ToolMessage
+- 如果有未响应的 tool_calls，移除整个 AIMessage
+```
+
+**截断策略**：
+
+```python
+# generalAgent/graph/message_utils.py:truncate_messages_safely()
+# 安全截断消息历史，保留 AIMessage-ToolMessage 对
+
+规则：
+- 保留最近 N 条消息（默认 40）
+- 如果保留的 ToolMessage 有对应的 AIMessage，必须一起保留
+- 保留所有 SystemMessage（不计入 N）
+```
+
+**示例**：
+
+```
+原始历史: 100 条消息
+清理后: 95 条消息（移除 5 条未响应的 AIMessage）
+截断后: 40 条消息（保留最近对话 + SystemMessage）
+```
+
+**验收标准**：
+- ✅ 清理未响应的 tool_calls（避免 OpenAI API 错误）
+- ✅ 截断时保留 AIMessage-ToolMessage 对
+- ✅ 始终保留 SystemMessage
+- ✅ 可配置截断阈值（MAX_MESSAGE_HISTORY）
+
+**实现参考**：`generalAgent/graph/message_utils.py`
+
+---
+
+#### 需求 8：路由逻辑
+
+**需求描述**：
+实现三个路由函数，控制 Agent Loop 的执行流程。
+
+**agent_route**（Planner 节点后）：
+
+```python
+# generalAgent/graph/routing.py:agent_route()
+
+优先级：
+1. 检查 Loop 限制（loops >= max_loops → finalize）
+2. 检查压缩需求（needs_compression → summarization）
+3. 检查工具调用（tool_calls → tools，否则 finalize）
+```
+
+**tools_route**（Tools 节点后）：
+
+```python
+# generalAgent/graph/routing.py:tools_route()
+
+返回值：
+- 如果有 Handoff（current_agent 已更新），返回目标 Agent
+- 否则返回 "agent"（主 Agent）
+```
+
+**summarization_route**（Summarization 节点后）：
+
+```python
+# generalAgent/graph/routing.py:summarization_route()
+
+返回值：
+- 始终返回 "agent"（压缩完成后继续执行）
+```
+
+**路由决策日志**：
+
+```
+[2025-10-31 12:34:56] [routing] agent → tools (LLM requested 2 tool call(s))
+[2025-10-31 12:34:58] [routing] tools → agent (Tool execution complete)
+[2025-10-31 12:35:00] [routing] agent → summarization (Token usage 96%, needs compression)
+[2025-10-31 12:35:05] [routing] summarization → agent (Compression complete)
+[2025-10-31 12:35:07] [routing] agent → finalize (No tool calls, LLM decided to finish)
+```
+
+**验收标准**：
+- ✅ 路由优先级正确（Loop 限制 > 压缩 > 工具调用）
+- ✅ 支持 Handoff Pattern（Multi-Agent）
+- ✅ 记录路由决策日志
+
+**实现参考**：`generalAgent/graph/routing.py`
+
+---
+
+#### 需求 9：KV Cache 优化
+
+**需求描述**：
+优化 SystemMessage 和提醒机制，最大化 KV Cache 复用率，降低推理成本。
+
+**优化策略**：
+
+| 优化点 | 方法 | 效果 |
+|--------|------|------|
+| 固定 SystemMessage | 启动时生成一次，包含时间戳（分钟级） | 70-90% KV Cache 复用 |
+| 动态提醒后置 | 追加到最后一条 HumanMessage，不修改 SystemMessage | 提高 Cache 命中率 |
+| 时间戳精度降级 | 分钟级（HH:MM）而非秒级（HH:MM:SS） | 同一分钟内 100% 复用 |
+
+**SystemMessage 结构**：
+
+```python
+# 启动时生成一次，整个会话期间不变
+system_prompt = f"""
+{PLANNER_SYSTEM_PROMPT}  # 固定指令
+
+{skills_catalog}  # 启用的技能列表（静态）
+
+{agents_catalog}  # 启用的 Agent 列表（静态）
+
+<current_datetime>2025-10-31 12:34 UTC</current_datetime>  # 分钟级时间戳
 """
 ```
 
-**Token估算**:
-- Core工具: ~1200 tokens (6个 × ~200 tokens)
-- Optional工具: ~1800 tokens (10个 × ~180 tokens)
+**动态提醒示例**：
 
-**参考代码**: `generalAgent/tools/builtin/*.py`
+```python
+# 追加到最后一条 HumanMessage
+last_message.content += """
 
----
-
-## 3. 技能文档模板
-
-### 3.1 SKILL.md标准结构
-
-所有技能的SKILL.md遵循统一结构:
-
-# {技能名称}
-
-## 概述
-简要说明技能用途和适用场景(2-3句话)
-
-## 使用场景
-- 场景1: 描述
-- 场景2: 描述
-- 场景3: 描述
-
-## 使用方法
-
-### 步骤1: 准备工作
-详细说明第一步操作...
-
-### 步骤2: 执行任务
-详细说明第二步操作...
-
-### 步骤3: 验证结果
-如何检查任务完成情况...
-
-## 可用脚本
-
-### script1.py
-- **用途**: 脚本功能说明
-- **参数**:
-  - arg1: 说明
-  - arg2: 说明
-- **示例**:
-  ```bash
-  python skills/{skill_id}/scripts/script1.py arg1 arg2
-  ```
-
-## 注意事项
-- 注意点1
-- 注意点2
-
-## 参考资料
-- 链接1
-- 链接2
-
-**Token估算**: 500-1500 tokens/技能
-
----
-
-### 3.2 内置参考技能SKILL.md清单
-
-**FR-PROMPT-017**: pdf技能 (~1200 tokens)
-- 位置: `skills/pdf/SKILL.md`
-- 用途: PDF处理(表单填写、内容提取、合并拆分)
-
-**FR-PROMPT-018**: docx技能 (~1000 tokens)
-- 位置: `skills/docx/SKILL.md`
-- 用途: Word文档处理(内容提取、样式修改、表格操作)
-
-**FR-PROMPT-019**: xlsx技能 (~1100 tokens)
-- 位置: `skills/xlsx/SKILL.md`
-- 用途: Excel表格处理(数据读写、公式计算、图表生成)
-
-**FR-PROMPT-020**: pptx技能 (~900 tokens)
-- 位置: `skills/pptx/SKILL.md`
-- 用途: PowerPoint处理(内容提取、幻灯片生成)
-
-**FR-PROMPT-021**: artifacts技能 (~800 tokens)
-- 位置: `skills/artifacts/SKILL.md`
-- 用途: 生成可交互内容(HTML/SVG/Mermaid/React)
-
-**FR-PROMPT-022**: skill-creator技能 (~700 tokens)
-- 位置: `skills/skill-creator/SKILL.md`
-- 用途: 辅助创建新技能包
-
----
-
-## 4. 动态提醒
-
-动态提醒在运行时生成,追加到最后一条 HumanMessage 末尾,实现KV Cache友好。
-
-### 4.1 TODO列表提醒
-
-**触发条件**: 存在未完成的TODO项
-
-**格式**:
-```xml
 <system_reminder>
-Your todo list has changed. Here are the latest contents:
-
-[1. [completed] Read requirements
-2. [in_progress] Write code
-3. [pending] Run tests]
-
-Continue with the current task if applicable.
+⚠️ 检测到上传文件: report.pdf
+建议使用 @pdf 技能处理
 </system_reminder>
-```
 
-**Token估算**: 50-200 tokens
-
-**生成位置**: `generalAgent/graph/prompts.py:build_dynamic_reminders()`
-
----
-
-### 4.2 @mention加载提醒
-
-**触发条件**: 用户使用@mention加载工具或技能
-
-**格式** (工具):
-```xml
 <system_reminder>
-Tool '@fetch_web' has been loaded and is now available for use.
+⚠️ Token 使用率: 82% (警告阈值 85%)
+建议压缩上下文（使用 compact_context 工具）
 </system_reminder>
+"""
 ```
 
-**格式** (技能):
-```xml
-<system_reminder>
-Skill '@pdf' has been linked to workspace.
+**成本对比**：
 
-Please read the skill documentation:
-- read_file("skills/pdf/SKILL.md")
+| 场景 | 传统方式 | 优化后 | 成本降低 |
+|------|---------|--------|---------|
+| 短对话（10 轮） | 100% 全量计算 | 90% KV Cache 复用 | 60% |
+| 长对话（100 轮） | 100% 全量计算 | 70% KV Cache 复用 | 80% |
 
-Then follow the instructions to complete the task.
-Available tool: run_bash_command (for executing scripts)
-</system_reminder>
-```
+**验收标准**：
+- ✅ SystemMessage 在会话期间固定不变
+- ✅ 时间戳精度为分钟级（HH:MM UTC）
+- ✅ 动态提醒追加到最后一条 HumanMessage
+- ✅ 多轮对话中 KV Cache 复用率 ≥70%
 
-**Token估算**: 30-100 tokens/提醒
-
-**生成位置**: `generalAgent/cli.py:process_mentions()`
+**实现参考**：`generalAgent/graph/nodes/planner.py:86-107`、`generalAgent/graph/nodes/finalize.py:34-42`
 
 ---
 
-### 4.3 文件上传提醒
+### 非功能需求
 
-**触发条件**: 用户上传文件(通过#filename语法)
+#### 性能需求
 
-**格式**:
-```xml
-<system_reminder>
-File uploaded: report.pdf
-- Location: uploads/report.pdf
-- Format: PDF
-- Size: 2.5 MB
+| 指标 | 目标值 | 测量方法 |
+|------|--------|---------|
+| Planner 节点耗时 | <5s | 从进入到返回的时间 |
+| Tools 节点耗时 | <3s | 单个工具执行时间 |
+| Summarization 耗时 | <10s | LLM 压缩时间 |
+| Loop 吞吐量 | ≥10 loops/min | 完整对话流程测试 |
+| Token 追踪开销 | <10ms | extract_token_usage() 耗时 |
 
-Suggested actions:
-- read_file("uploads/report.pdf") for preview
-- search_file("uploads/report.pdf", "keyword") for content search
-- @pdf for PDF-specific operations
-</system_reminder>
-```
+#### 可靠性需求
 
-**Token估算**: 50-150 tokens/文件
+| 需求 | 说明 | 验收标准 |
+|------|------|----------|
+| 消息一致性 | AIMessage-ToolMessage 对完整 | clean_message_history() 测试 |
+| Loop 限制生效 | 超过 max_loops 时强制结束 | 压力测试 |
+| 压缩降级策略 | LLM 压缩失败时回退截断 | 异常注入测试 |
+| 状态隔离 | Subagent 不污染主 Agent 状态 | 单元测试 |
 
-**生成位置**: `generalAgent/cli.py:process_file_uploads()`
+#### 可观测性需求
 
----
-
-## 5. HITL交互界面
-
-### 5.1 ask_human提问界面
-
-**用途**: Agent主动向用户提问
-
-**格式**:
-```
-💬 {question}
-
-{context (如果提供)}
-
-(默认: {default}) >
-```
-
-**示例**:
-```
-💬 您希望报告以什么格式输出?
-
-支持的格式: PDF, Markdown, HTML
-
-(默认: markdown) > PDF
-```
-
-**Token估算**: 提问内容的token数 + ~20 tokens (格式化)
-
-**生成位置**: `generalAgent/cli.py:handle_ask_human()`
+| 需求 | 说明 | 验收标准 |
+|------|------|----------|
+| Loop 计数日志 | 每次 Loop 记录 loops/max_loops | 日志检查 |
+| Token 追踪日志 | 每次 LLM 调用记录 token 使用 | 日志检查 |
+| 路由决策日志 | 记录每次路由选择及原因 | 日志检查 |
+| 压缩统计日志 | 记录压缩前后消息数和压缩比 | 日志检查 |
 
 ---
 
-### 5.2 工具审批界面
+### 参考代码位置
 
-**用途**: 危险工具需要用户审批
-
-**格式**:
-```
-🛡️  工具审批: {tool_name}
-
-原因: {reason}
-风险级别: {risk_level}
-
-参数:
-  {arg1}: {value1}
-  {arg2}: {value2}
-
-批准执行? [y/n] >
-```
-
-**示例**:
-```
-🛡️  工具审批: run_bash_command
-
-原因: 检测到危险命令(递归删除)
-风险级别: high
-
-参数:
-  command: rm -rf outputs/old/
-  timeout: 30
-
-批准执行? [y/n] > n
-
-❌ 已拒绝执行
-```
-
-**Token估算**: 参数内容的token数 + ~50 tokens (格式化)
-
-**生成位置**: `generalAgent/cli.py:handle_approval_request()`
-
----
-
-## 参考代码位置
-
-| Prompt类型 | 主要文件路径 |
-|------------|-------------|
-| **Agent系统提示** | `generalAgent/graph/prompts.py` |
-| **工具描述** | `generalAgent/tools/builtin/*.py`, `generalAgent/tools/custom/*.py` |
-| **技能文档** | `skills/*/SKILL.md` |
-| **动态提醒构建** | `generalAgent/graph/prompts.py:build_dynamic_reminders()` |
-| **TODO提醒** | `generalAgent/graph/prompts.py:181-195` |
-| **@mention提醒** | `generalAgent/cli.py:process_mentions()` |
-| **文件上传提醒** | `generalAgent/cli.py:process_file_uploads()` |
-| **ask_human界面** | `generalAgent/cli.py:handle_ask_human()` |
-| **审批界面** | `generalAgent/cli.py:handle_approval_request()` |
+| 功能模块 | 代码路径 |
+|---------|---------|
+| 状态定义 | `generalAgent/graph/state.py` |
+| Graph 构建 | `generalAgent/graph/builder.py` |
+| Planner 节点 | `generalAgent/graph/nodes/planner.py` |
+| Finalize 节点 | `generalAgent/graph/nodes/finalize.py` |
+| Summarization 节点 | `generalAgent/graph/nodes/summarization.py` |
+| 路由逻辑 | `generalAgent/graph/routing.py` |
+| 消息处理工具 | `generalAgent/graph/message_utils.py` |
+| 上下文管理器 | `generalAgent/context/manager.py` |
+| Token 追踪器 | `generalAgent/context/token_tracker.py` |
+| 系统提示词 | `generalAgent/graph/prompts.py` |
 
 ---
 
@@ -2573,653 +2716,6 @@ Script execution failed: Missing dependency
 
 ---
 
-# 2. Agent 流程与状态管理
-
-### 产品定位
-
-Agent 流程与状态管理是框架的核心执行引擎，基于 **Agent Loop 架构**（ReAct 模式）实现 LLM 自主决策的多轮对话流程。系统通过状态管理追踪会话上下文、工具调用、任务进度，并提供自动上下文压缩机制应对长对话场景。
-
-**价值主张**：
-- **自主决策**：LLM 自主选择工具调用或结束对话，无需人工预定义执行流程
-- **状态隔离**：支持主 Agent 与 Subagent 上下文隔离，防止状态污染
-- **自动优化**：Token 使用率超过 95% 时自动压缩历史，无需用户干预
-- **可观测性**：完整的 Loop 计数、Token 追踪、节点日志，便于调试和优化
-
----
-
-### 核心场景
-
-#### 场景 1：多轮研究任务
-
-**用户故事**：
-用户要求 "研究 Python 3.13 的新特性并生成对比报告"，Agent 需要：
-1. 搜索官方文档
-2. 提取关键特性
-3. 对比旧版本
-4. 生成 Markdown 报告
-5. 保存到 outputs/ 目录
-
-**系统行为**：
-- Planner 节点决定调用 search_web 工具
-- Tools 节点执行搜索，返回结果
-- Planner 节点分析结果，决定调用 read_file
-- 循环直到生成报告
-- Finalize 节点格式化最终输出
-
-**关键点**：
-- 最多执行 100 个 Loop（可配置）
-- 每次 Loop 累计 Token 使用
-- 自动检测 Token 使用率
-
----
-
-#### 场景 2：长对话自动压缩
-
-**用户故事**：
-用户与 Agent 进行 300 轮对话（约 120K tokens），系统需要在不中断对话的情况下释放 Token 空间。
-
-**系统行为**：
-1. Planner 节点检测 Token 使用率达到 95%
-2. 自动路由到 Summarization 节点
-3. LLM 将前 290 条消息压缩为 1 条摘要
-4. 保留最近 10 条消息
-5. 返回 Planner 节点继续执行
-
-**关键点**：
-- 用户无感知（无压缩通知）
-- 保留最近对话上下文（默认保留 15% context window）
-- 支持 LLM 压缩和紧急截断两种策略
-
----
-
-#### 场景 3：Subagent 状态隔离
-
-**用户故事**：
-用户在主 Agent 中调用 delegate_task 将子任务分配给 Subagent，需要确保 Subagent 不干扰主 Agent 的状态。
-
-**系统行为**：
-- Subagent 创建独立的 AppState 实例
-- `context_id` 设置为 `subagent-{uuid}`
-- `parent_context` 指向主 Agent 的 `context_id`
-- 继承工具、技能、工作区路径
-- 不继承消息历史
-- 完成后将结果返回主 Agent
-
-**关键点**：
-- 状态隔离防止污染
-- 工具和工作区继承提高效率
-- 支持嵌套调用（最大深度 3 层）
-
----
-
-### 功能需求
-
-#### 需求 1：Agent Loop 架构
-
-**需求描述**：
-实现基于 LangGraph 的 Agent Loop 架构（ReAct 模式），支持 LLM 自主决策的多轮对话流程。
-
-**流程图**：
-
-```
-START → agent ⇄ tools → agent ⇄ ... → finalize → END
-          ↑      ↓
-          ↑ summarization (auto-compress when >95% tokens)
-          ↑______↓
-```
-
-**节点定义**：
-
-| 节点 | 功能 | 输入 | 输出 | 下一步 |
-|------|------|------|------|--------|
-| agent (Planner) | LLM 推理，决策工具调用 | 消息历史 + 可见工具 | AIMessage (with/without tool_calls) | tools / finalize / summarization |
-| tools | 执行工具调用 | tool_calls | ToolMessage[] | agent |
-| summarization | 压缩消息历史 | 消息历史 | 压缩后消息 | agent |
-| finalize | 格式化最终输出 | 消息历史 | 最终 AIMessage | END |
-
-**路由逻辑**：
-
-```python
-# generalAgent/graph/routing.py:agent_route()
-def agent_route(state: AppState):
-    # 1. 检查 Loop 限制
-    if loops >= max_loops:
-        return "finalize"
-
-    # 2. 检查 Token 使用率（>95% 触发压缩）
-    if needs_compression and not auto_compressed:
-        return "summarization"
-
-    # 3. 检查工具调用
-    if last_message.tool_calls:
-        return "tools"
-    else:
-        return "finalize"
-```
-
-**验收标准**：
-- ✅ 支持最大 100 Loop（可配置 1-500）
-- ✅ Token 使用率 >95% 时自动路由到 summarization
-- ✅ LLM 决定无需工具时自动结束
-- ✅ Loop 限制触发时强制 finalize
-
-**实现参考**：`generalAgent/graph/builder.py`、`generalAgent/graph/routing.py`
-
----
-
-#### 需求 2：状态定义（AppState）
-
-**需求描述**：
-定义完整的会话状态结构，包含消息历史、工具状态、任务追踪、上下文隔离、Token 追踪等所有必要信息。
-
-**状态字段**：
-
-```python
-# generalAgent/graph/state.py:AppState
-class AppState(TypedDict, total=False):
-    # ========== 消息与多媒体 ==========
-    messages: List[BaseMessage]  # LangChain 消息列表（累加器）
-    images: List[Any]  # 图片列表
-
-    # ========== 技能与工具 ==========
-    active_skill: Optional[str]  # 当前激活的技能 ID
-    allowed_tools: List[str]  # 技能允许使用的工具列表
-    mentioned_agents: List[str]  # 历史 @mention 记录
-    new_mentioned_agents: List[str]  # 本轮新增 @mention（用于提醒）
-    persistent_tools: List[str]  # 持久化工具（始终可用）
-
-    # ========== 任务追踪 ==========
-    todos: List[dict]  # 任务列表（TodoWrite 工具管理）
-
-    # ========== 上下文隔离 ==========
-    context_id: str  # "main" 或 "subagent-{uuid}"
-    parent_context: Optional[str]  # 父上下文 ID（仅 Subagent）
-
-    # ========== 执行控制 ==========
-    loops: int  # 全局 Loop 计数器
-    max_loops: int  # Loop 上限（默认 100）
-
-    # ========== 模型偏好 ==========
-    model_pref: Optional[str]  # 用户指定模型类型（vision/code/...）
-
-    # ========== 会话上下文 ==========
-    thread_id: Optional[str]  # 会话 ID（用于持久化）
-    user_id: Optional[str]  # 用户 ID（未来扩展）
-    workspace_path: Optional[str]  # 工作区路径
-    uploaded_files: List[Any]  # 上传文件列表（历史记录）
-    new_uploaded_files: List[Any]  # 本轮新上传文件（用于提醒）
-
-    # ========== Agent 系统 ==========
-    agent_call_stack: List[str]  # 调用栈（检测循环）
-    agent_call_history: List[str]  # 调用历史（审计）
-    current_agent: Optional[str]  # 当前活跃 Agent
-
-    # ========== Token 追踪与压缩 ==========
-    cumulative_prompt_tokens: int  # 当前上下文大小（tokens）
-    cumulative_completion_tokens: int  # 累计输出 tokens
-    last_prompt_tokens: int  # 上次调用的 prompt tokens
-    compact_count: int  # 压缩次数
-    last_compact_strategy: Optional[str]  # 上次压缩策略
-    last_compression_ratio: Optional[float]  # 上次压缩比
-    auto_compressed_this_request: bool  # 本轮是否已压缩
-    needs_compression: bool  # 是否需要压缩（路由标志）
-```
-
-**字段分类**：
-
-| 类别 | 字段数 | 用途 |
-|------|--------|------|
-| 消息管理 | 2 | 对话历史、图片 |
-| 工具/技能 | 5 | 动态加载、权限控制 |
-| 任务追踪 | 1 | TodoWrite 工具 |
-| 上下文隔离 | 2 | 主 Agent / Subagent 隔离 |
-| 执行控制 | 2 | Loop 限制 |
-| 会话上下文 | 5 | 持久化、工作区 |
-| Agent 系统 | 3 | Multi-Agent 协作 |
-| Token 管理 | 9 | 自动压缩 |
-
-**验收标准**：
-- ✅ 支持 LangChain 消息累加器（`add_messages`）
-- ✅ 支持主 Agent 和 Subagent 状态隔离
-- ✅ 支持 Token 追踪和压缩标志位
-- ✅ 所有字段类型正确，支持 TypedDict 类型检查
-
-**实现参考**：`generalAgent/graph/state.py`
-
----
-
-#### 需求 3：Planner 节点
-
-**需求描述**：
-实现 Planner 节点（agent 节点），负责 LLM 推理、工具可见性控制、动态提醒生成、Token 监控。
-
-**核心逻辑**：
-
-```
-1. 收集可见工具（persistent + @mentioned）
-2. 检测多模态输入（图片/代码）
-3. 构建 SystemMessage（静态，KV Cache 优化）
-4. 构建动态提醒（技能、工具、TODO、文件上传）
-5. 追加提醒到最后一条 HumanMessage
-6. 调用 LLM（model_registry + model_resolver）
-7. 提取 Token 使用信息
-8. 检查 Token 使用率（>95% 设置 needs_compression 标志）
-9. 返回 AIMessage + 更新状态
-```
-
-**SystemMessage 结构**（KV Cache 优化）：
-
-```
-[固定内容 - 系统指令]
-[技能目录 - 启用的技能列表]
-[Agent 目录 - 启用的 Agent 列表]
-[时间戳 - 分钟级精度，启动时生成一次]
-```
-
-**动态提醒追加到最后一条消息**：
-
-```
-User> 帮我分析这个 PDF
-
-[系统自动追加到 HumanMessage]
-<system_reminder>
-⚠️ 检测到上传文件: report.pdf (PDF 格式)
-建议使用 @pdf 技能处理
-</system_reminder>
-
-<system_reminder>
-⚠️ 任务追踪 (2 个未完成):
-  [进行中] 分析 PDF 文档
-  [待完成] 生成分析报告
-</system_reminder>
-```
-
-**Token 监控逻辑**：
-
-| Token 使用率 | 行为 | 日志级别 |
-|-------------|------|---------|
-| <75% | 正常执行 | INFO |
-| 75%-85% | 记录信息，动态加载 compact_context 工具 | INFO |
-| 85%-95% | 警告，添加 Token 提醒到消息 | WARNING |
-| >95% | 跳过 LLM 调用，设置 needs_compression=True | WARNING |
-
-**验收标准**：
-- ✅ SystemMessage 固定不变（KV Cache 优化）
-- ✅ 动态提醒追加到最后一条 HumanMessage
-- ✅ Token 使用率 >95% 时设置压缩标志位
-- ✅ 支持多模态输入检测（图片 → 自动选择 vision 模型）
-- ✅ 正确累加 Loop 计数器
-
-**实现参考**：`generalAgent/graph/nodes/planner.py`
-
----
-
-#### 需求 4：Tools 节点（工具执行）
-
-**需求描述**：
-实现 Tools 节点，负责执行 LLM 生成的工具调用，并返回 ToolMessage 结果。
-
-**执行流程**：
-
-```
-1. 解析 AIMessage 中的 tool_calls
-2. 对每个 tool_call:
-   a. 从 ToolRegistry 查找工具
-   b. 如果未找到，尝试 load_on_demand()
-   c. 执行工具函数（传入参数）
-   d. 捕获异常并返回错误消息
-3. 收集所有 ToolMessage
-4. 返回到 Planner 节点（或当前 Agent）
-```
-
-**HITL 集成**（可选）：
-
-```python
-# 如果启用 ApprovalChecker，Tools 节点会检查工具调用是否需要审批
-# 示例：run_bash_command("rm -rf /") 需要用户确认
-
-tools_node = ApprovalToolNode(
-    tools=all_discovered_tools,
-    approval_checker=approval_checker,
-    enable_approval=True
-)
-```
-
-**错误处理**：
-
-| 错误类型 | ToolMessage 内容 | 日志级别 |
-|---------|----------------|---------|
-| 工具未找到 | "Error: Tool 'xxx' not found" | ERROR |
-| 参数错误 | "Error: Invalid arguments for 'xxx': ..." | WARNING |
-| 执行异常 | "Error: Tool execution failed: ..." | ERROR |
-| 需要审批被拒绝 | "Operation cancelled by user" | INFO |
-
-**验收标准**：
-- ✅ 支持并发执行多个工具调用
-- ✅ 支持工具按需加载（load_on_demand）
-- ✅ 支持 HITL 审批拦截
-- ✅ 错误消息清晰，包含工具名称和参数
-- ✅ 返回到调用方 Agent（支持 Handoff Pattern）
-
-**实现参考**：`generalAgent/graph/builder.py:105-122`、`generalAgent/hitl/approval_node.py`
-
----
-
-#### 需求 5：Finalize 节点（最终输出）
-
-**需求描述**：
-实现 Finalize 节点，负责在 Agent Loop 结束时格式化最终输出。
-
-**触发条件**：
-- LLM 没有生成 tool_calls
-- Loop 计数器达到 max_loops
-- 最后一条消息是 ToolMessage（需要生成自然语言回复）
-
-**核心逻辑**：
-
-```
-1. 检查最后一条消息是否为 ToolMessage
-   - 如果不是，跳过 Finalize（LLM 已经生成最终回复）
-2. 清理消息历史（移除无效 tool_calls）
-3. 安全截断消息历史（保留最近 N 条，默认 40）
-4. 调用 LLM（无工具绑定）
-5. 返回最终 AIMessage
-```
-
-**SystemMessage**（简化版）：
-
-```
-你是一个智能助手。现在请根据工具执行结果，生成最终回复给用户。
-
-要求：
-- 总结工具执行结果
-- 用自然语言表达
-- 如果有错误，解释原因
-
-<current_datetime>2025-10-31 12:34 UTC</current_datetime>
-```
-
-**验收标准**：
-- ✅ 仅在最后一条消息是 ToolMessage 时执行
-- ✅ 不绑定任何工具（避免继续循环）
-- ✅ 正确处理消息历史截断
-- ✅ 生成自然语言回复
-
-**实现参考**：`generalAgent/graph/nodes/finalize.py`
-
----
-
-#### 需求 6：Summarization 节点（自动压缩）
-
-**需求描述**：
-实现 Summarization 节点，负责在 Token 使用率超过 95% 时自动压缩消息历史。
-
-**触发条件**：
-- `needs_compression = True`（Planner 设置）
-- `auto_compressed_this_request = False`（防止重复压缩）
-- 消息数量 ≥ `min_messages_to_compress`（默认 15 条）
-
-**压缩策略**：
-
-| 策略 | 适用场景 | 保留内容 | 压缩方式 |
-|------|---------|---------|---------|
-| LLM 压缩 | 首选 | 最近 15% context window 的消息 | LLM 总结摘要 |
-| 紧急截断 | LLM 压缩失败 | 最近 100 条消息 | 直接删除旧消息 |
-
-**压缩流程**：
-
-```
-1. 检查是否需要压缩
-2. 计算保留消息数量
-   - 基于 Token 比例：context_window * keep_recent_ratio（默认 15%）
-   - 基于消息数量：keep_recent_messages（默认 10 条）
-   - 取两者中先达到的阈值
-3. 调用 LLM 压缩旧消息
-   - 提示词：请总结以下对话内容，保留关键信息...
-4. 生成压缩后消息列表
-   - [SystemMessage, 压缩摘要 AIMessage, 最近 N 条消息]
-5. 重置 Token 计数器
-6. 返回 Planner 节点继续执行
-```
-
-**用户体验**：
-- 用户**无感知**（不显示压缩通知）
-- 对话上下文保留完整语义
-- Agent 继续回答原始问题
-
-**示例**：
-
-```
-压缩前: 302 条消息（123K tokens）
-压缩后: 13 条消息（6.5K tokens）
-压缩比: 95%
-策略: LLM 压缩
-```
-
-**验收标准**：
-- ✅ Token 使用率 >95% 时自动触发
-- ✅ 保留最近 15% context window 的消息（或至少 10 条）
-- ✅ LLM 压缩失败时回退到紧急截断
-- ✅ 用户无感知（无通知消息）
-- ✅ 压缩后正确重置 Token 计数器
-
-**实现参考**：`generalAgent/graph/nodes/summarization.py`、`generalAgent/context/manager.py`
-
----
-
-#### 需求 7：消息历史管理
-
-**需求描述**：
-提供消息历史清理和安全截断功能，确保 OpenAI API 兼容性。
-
-**清理规则**：
-
-```python
-# generalAgent/graph/message_utils.py:clean_message_history()
-# 移除未被响应的 tool_calls
-
-规则：
-- 收集所有 ToolMessage.tool_call_id
-- 遍历 AIMessage，检查其 tool_calls 是否都有对应的 ToolMessage
-- 如果有未响应的 tool_calls，移除整个 AIMessage
-```
-
-**截断策略**：
-
-```python
-# generalAgent/graph/message_utils.py:truncate_messages_safely()
-# 安全截断消息历史，保留 AIMessage-ToolMessage 对
-
-规则：
-- 保留最近 N 条消息（默认 40）
-- 如果保留的 ToolMessage 有对应的 AIMessage，必须一起保留
-- 保留所有 SystemMessage（不计入 N）
-```
-
-**示例**：
-
-```
-原始历史: 100 条消息
-清理后: 95 条消息（移除 5 条未响应的 AIMessage）
-截断后: 40 条消息（保留最近对话 + SystemMessage）
-```
-
-**验收标准**：
-- ✅ 清理未响应的 tool_calls（避免 OpenAI API 错误）
-- ✅ 截断时保留 AIMessage-ToolMessage 对
-- ✅ 始终保留 SystemMessage
-- ✅ 可配置截断阈值（MAX_MESSAGE_HISTORY）
-
-**实现参考**：`generalAgent/graph/message_utils.py`
-
----
-
-#### 需求 8：路由逻辑
-
-**需求描述**：
-实现三个路由函数，控制 Agent Loop 的执行流程。
-
-**agent_route**（Planner 节点后）：
-
-```python
-# generalAgent/graph/routing.py:agent_route()
-
-优先级：
-1. 检查 Loop 限制（loops >= max_loops → finalize）
-2. 检查压缩需求（needs_compression → summarization）
-3. 检查工具调用（tool_calls → tools，否则 finalize）
-```
-
-**tools_route**（Tools 节点后）：
-
-```python
-# generalAgent/graph/routing.py:tools_route()
-
-返回值：
-- 如果有 Handoff（current_agent 已更新），返回目标 Agent
-- 否则返回 "agent"（主 Agent）
-```
-
-**summarization_route**（Summarization 节点后）：
-
-```python
-# generalAgent/graph/routing.py:summarization_route()
-
-返回值：
-- 始终返回 "agent"（压缩完成后继续执行）
-```
-
-**路由决策日志**：
-
-```
-[2025-10-31 12:34:56] [routing] agent → tools (LLM requested 2 tool call(s))
-[2025-10-31 12:34:58] [routing] tools → agent (Tool execution complete)
-[2025-10-31 12:35:00] [routing] agent → summarization (Token usage 96%, needs compression)
-[2025-10-31 12:35:05] [routing] summarization → agent (Compression complete)
-[2025-10-31 12:35:07] [routing] agent → finalize (No tool calls, LLM decided to finish)
-```
-
-**验收标准**：
-- ✅ 路由优先级正确（Loop 限制 > 压缩 > 工具调用）
-- ✅ 支持 Handoff Pattern（Multi-Agent）
-- ✅ 记录路由决策日志
-
-**实现参考**：`generalAgent/graph/routing.py`
-
----
-
-#### 需求 9：KV Cache 优化
-
-**需求描述**：
-优化 SystemMessage 和提醒机制，最大化 KV Cache 复用率，降低推理成本。
-
-**优化策略**：
-
-| 优化点 | 方法 | 效果 |
-|--------|------|------|
-| 固定 SystemMessage | 启动时生成一次，包含时间戳（分钟级） | 70-90% KV Cache 复用 |
-| 动态提醒后置 | 追加到最后一条 HumanMessage，不修改 SystemMessage | 提高 Cache 命中率 |
-| 时间戳精度降级 | 分钟级（HH:MM）而非秒级（HH:MM:SS） | 同一分钟内 100% 复用 |
-
-**SystemMessage 结构**：
-
-```python
-# 启动时生成一次，整个会话期间不变
-system_prompt = f"""
-{PLANNER_SYSTEM_PROMPT}  # 固定指令
-
-{skills_catalog}  # 启用的技能列表（静态）
-
-{agents_catalog}  # 启用的 Agent 列表（静态）
-
-<current_datetime>2025-10-31 12:34 UTC</current_datetime>  # 分钟级时间戳
-"""
-```
-
-**动态提醒示例**：
-
-```python
-# 追加到最后一条 HumanMessage
-last_message.content += """
-
-<system_reminder>
-⚠️ 检测到上传文件: report.pdf
-建议使用 @pdf 技能处理
-</system_reminder>
-
-<system_reminder>
-⚠️ Token 使用率: 82% (警告阈值 85%)
-建议压缩上下文（使用 compact_context 工具）
-</system_reminder>
-"""
-```
-
-**成本对比**：
-
-| 场景 | 传统方式 | 优化后 | 成本降低 |
-|------|---------|--------|---------|
-| 短对话（10 轮） | 100% 全量计算 | 90% KV Cache 复用 | 60% |
-| 长对话（100 轮） | 100% 全量计算 | 70% KV Cache 复用 | 80% |
-
-**验收标准**：
-- ✅ SystemMessage 在会话期间固定不变
-- ✅ 时间戳精度为分钟级（HH:MM UTC）
-- ✅ 动态提醒追加到最后一条 HumanMessage
-- ✅ 多轮对话中 KV Cache 复用率 ≥70%
-
-**实现参考**：`generalAgent/graph/nodes/planner.py:86-107`、`generalAgent/graph/nodes/finalize.py:34-42`
-
----
-
-### 非功能需求
-
-#### 性能需求
-
-| 指标 | 目标值 | 测量方法 |
-|------|--------|---------|
-| Planner 节点耗时 | <5s | 从进入到返回的时间 |
-| Tools 节点耗时 | <3s | 单个工具执行时间 |
-| Summarization 耗时 | <10s | LLM 压缩时间 |
-| Loop 吞吐量 | ≥10 loops/min | 完整对话流程测试 |
-| Token 追踪开销 | <10ms | extract_token_usage() 耗时 |
-
-#### 可靠性需求
-
-| 需求 | 说明 | 验收标准 |
-|------|------|----------|
-| 消息一致性 | AIMessage-ToolMessage 对完整 | clean_message_history() 测试 |
-| Loop 限制生效 | 超过 max_loops 时强制结束 | 压力测试 |
-| 压缩降级策略 | LLM 压缩失败时回退截断 | 异常注入测试 |
-| 状态隔离 | Subagent 不污染主 Agent 状态 | 单元测试 |
-
-#### 可观测性需求
-
-| 需求 | 说明 | 验收标准 |
-|------|------|----------|
-| Loop 计数日志 | 每次 Loop 记录 loops/max_loops | 日志检查 |
-| Token 追踪日志 | 每次 LLM 调用记录 token 使用 | 日志检查 |
-| 路由决策日志 | 记录每次路由选择及原因 | 日志检查 |
-| 压缩统计日志 | 记录压缩前后消息数和压缩比 | 日志检查 |
-
----
-
-### 参考代码位置
-
-| 功能模块 | 代码路径 |
-|---------|---------|
-| 状态定义 | `generalAgent/graph/state.py` |
-| Graph 构建 | `generalAgent/graph/builder.py` |
-| Planner 节点 | `generalAgent/graph/nodes/planner.py` |
-| Finalize 节点 | `generalAgent/graph/nodes/finalize.py` |
-| Summarization 节点 | `generalAgent/graph/nodes/summarization.py` |
-| 路由逻辑 | `generalAgent/graph/routing.py` |
-| 消息处理工具 | `generalAgent/graph/message_utils.py` |
-| 上下文管理器 | `generalAgent/context/manager.py` |
-| Token 追踪器 | `generalAgent/context/token_tracker.py` |
-| 系统提示词 | `generalAgent/graph/prompts.py` |
-
----
-
 # 5. HITL 人机协同
 
 ### 产品定位
@@ -3625,27 +3121,6 @@ def check_bash_command_advanced(args: dict) -> ApprovalDecision:
 approval_checker.register_checker("run_bash_command", check_bash_command_advanced)
 ```
 
-**调用外部 API 示例**:
-
-```python
-def check_url_reputation(args: dict) -> ApprovalDecision:
-    url = args.get("url", "")
-
-    # 调用 VirusTotal API 检查 URL 信誉
-    response = requests.get(f"https://virustotal.com/api/v3/urls/{url}")
-
-    if response.json().get("malicious_count", 0) > 0:
-        return ApprovalDecision(
-            needs_approval=True,
-            reason="URL 被标记为恶意站点",
-            risk_level="critical"
-        )
-
-    return ApprovalDecision(needs_approval=False)
-
-approval_checker.register_checker("http_fetch", check_url_reputation)
-```
-
 **验收标准**:
 - ✅ 支持注册任意工具的检查器
 - ✅ 检查器优先级最高(第一层)
@@ -3876,259 +3351,434 @@ def _check_http_fetch(url: str) -> ApprovalDecision:
 
 ---
 
-# 10. 工作区管理
+# 6. 上下文管理
 
 ### 产品定位
 
-工作区管理是框架的文件隔离层,为每个会话提供独立的文件空间,支持技能链接、文件上传、输出隔离。通过WorkspaceManager实现路径安全、自动清理、依赖安装等功能。
+上下文管理是框架的智能优化层,负责监控 Token 使用、自动压缩历史、管理会话持久化。通过三级阈值监控(75%/85%/95%)和 LLM 压缩策略,在不中断对话的情况下释放 Token 空间,降低API成本60-80%,同时保证对话语义完整性。
 
-### 主要功能
-
-工作区管理的详细功能已在以下章节中涵盖:
-
-- **工作区结构** → 参见 **二、技能系统 - 工作区隔离** (第402-410行)
-  - `workspace/{session_id}/skills/` - 技能符号链接(只读)
-  - `workspace/{session_id}/uploads/` - 用户上传文件
-  - `workspace/{session_id}/outputs/` - Agent生成输出
-  - `workspace/{session_id}/temp/` - 临时文件
-
-- **技能链接机制** → 参见 **二、技能系统 - 需求4: 技能工作区链接** (第402-425行)
-  - 符号链接创建
-  - 依赖自动安装
-  - 路径安全检查
-
-- **工具路径限制** → 参见 **一、工具系统 - 需求5: 文件操作工具集** (第90-160行)
-  - write_file只能写outputs/和temp/
-  - read_file可以读skills/和uploads/
-  - 路径安全验证
-
-- **工作区继承** → 参见 **八、多Agent协作 - 需求6: 上下文隔离与继承** (第1797-1847行)
-  - Subagent继承主Agent的workspace_path
-  - 共享uploads/和outputs/目录
-
-### 参考代码位置
-
-| 功能模块 | 文件路径 | 说明 |
-|---------|---------|------|
-| WorkspaceManager | `shared/workspace/manager.py` | 工作区生命周期管理 |
-| 技能链接 | `shared/workspace/manager.py:link_skill()` | 符号链接创建 |
-| 依赖安装 | `shared/workspace/manager.py:link_skill()` | requirements.txt处理 |
-| 路径验证 | `generalAgent/tools/builtin/file_ops.py` | is_safe_path()检查 |
-| 自动清理 | `shared/workspace/manager.py:cleanup_old_workspaces()` | 7天过期清理 |
+**价值主张**:
+- **成本优化**:KV Cache 优化降低60-80%推理成本,自动压缩减少 Token 消耗
+- **用户无感**:压缩过程静默执行,无通知打扰,对话体验连续
+- **智能平衡**:LLM 压缩保留语义,紧急截断保证可靠性
+- **会话持久化**:SQLite 存储支持断点续聊,恢复时间<500ms
 
 ---
 
-# 11. 文件处理
+### 核心场景
 
-### 产品定位
+#### 场景 1:长对话自动优化
 
-文件处理是框架的I/O能力层,提供统一的文件读写、搜索、查找接口,支持多种文档格式(PDF/DOCX/XLSX/PPTX)的自动解析和索引。
+**用户故事**:
+用户与Agent进行300轮对话(~120K tokens),系统需要在不中断对话的情况下释放Token空间。
 
-### 主要功能
+**系统行为**:
+1. Planner节点检测Token使用率达到95%
+2. 自动路由到Summarization节点
+3. LLM将前290条消息压缩为1条摘要
+4. 保留最近10条消息
+5. 返回Planner节点继续执行
 
-文件处理的详细功能已在以下章节中涵盖:
-
-- **文件操作工具集** → 参见 **一、工具系统 - 需求5: 文件操作工具集** (第85-160行)
-  - `read_file`: 读取文本和文档(支持PDF/DOCX/XLSX/PPTX预览)
-  - `write_file`: 写入文件到outputs/或temp/
-  - `edit_file`: 基于diff的精确编辑
-  - `find_files`: Glob模式文件名搜索
-  - `search_file`: 全文内容搜索(支持文档索引)
-  - `list_workspace_files`: 列出工作区文件
-
-- **文档格式支持** → 参见 **一、工具系统 - read_file工具** (第85-110行)
-  - PDF: 分页预览,前10页或全文
-  - DOCX: 段落预览,前10页或全文
-  - XLSX: 工作表预览,前3个sheet
-  - PPTX: 幻灯片预览,前15张
-  - 文本文件: 直接读取(<100KB)或截断(>100KB)
-
-- **文档索引与搜索** → 参见 **一、工具系统 - search_file工具** (第140-160行)
-  - FTS5全文索引(SQLite)
-  - MD5去重(跨会话复用索引)
-  - 多策略评分:短语(10分) > 三元组(5分) > 二元组(3分) > 关键词(2分)
-  - 自动索引构建(首次2-5秒,后续<100ms)
-
-- **文件上传自动处理** → 参见 **二、技能系统 - 需求2: 文件上传自动加载** (第330-360行)
-  - 上传PDF自动加载@pdf技能
-  - 上传DOCX自动加载@docx技能
-  - 动态hints生成
-
-### 核心特性
-
-#### 文档预览策略
-
-**小文件**(≤阈值):
-- PDF/DOCX: ≤10页 → 全文返回
-- XLSX: ≤3个sheet → 全部返回
-- PPTX: ≤15张幻灯片 → 全部返回
-
-**大文件**(>阈值):
-- 返回前N页/sheet/幻灯片预览
-- 提示使用search_file搜索具体内容
-- 避免Token浪费
-
-#### 索引管理
-
-**全局索引存储**:
-- 路径: `data/indexes/{md5[:2]}/{md5}.db`
-- 两级目录结构(避免单目录文件过多)
-- 跨会话复用(相同内容共享索引)
-
-**自动清理**:
-- 文件替换时删除旧索引(MD5变化)
-- 定期清理孤儿索引(24小时未访问)
-
-### 参考代码位置
-
-| 功能模块 | 文件路径 | 说明 |
-|---------|---------|------|
-| 文件操作工具 | `generalAgent/tools/builtin/file_ops.py` | read/write/edit/list |
-| 文件查找 | `generalAgent/tools/builtin/find_files.py` | Glob模式搜索 |
-| 文件搜索 | `generalAgent/tools/builtin/search_file.py` | 全文搜索+索引 |
-| 文档提取器 | `generalAgent/utils/document_extractors.py` | PDF/DOCX/XLSX/PPTX解析 |
-| 文本索引器 | `generalAgent/utils/text_indexer.py` | FTS5索引构建 |
-| 索引管理器 | `generalAgent/utils/text_indexer.py:TextIndexManager` | MD5去重、自动清理 |
+**关键点**:
+- 用户无感知(无压缩通知)
+- 压缩比高达95%
+- 对话语义完整保留
 
 ---
 
-# 12. 会话管理
+#### 场景 2:会话断点续聊
 
-### 产品定位
+**用户故事**:
+用户在办公室与Agent讨论项目需求(50轮对话),关闭应用后回家继续讨论,系统需要完整恢复上下文。
 
-会话管理是框架的持久化层,负责保存和恢复完整的对话状态,支持断点续聊、多会话并发、快速切换。通过SQLite Checkpointer实现轻量级持久化,恢复时间<500ms。
+**系统行为**:
+1. 用户使用`/sessions`命令查看历史会话
+2. 选择会话ID: `abc123`
+3. 使用`/load abc123`加载会话
+4. 系统从SQLite恢复:消息历史、工具状态、技能、工作区路径
+5. 用户继续提问,Agent理解之前的上下文
 
-### 主要功能
+**关键点**:
+- 恢复时间<500ms
+- 100%状态恢复
+- 支持1000+并发会话
 
-会话管理的详细功能已在 **六、上下文管理** 章节中涵盖:
+---
 
-- **会话持久化** → 参见 **六、上下文管理 - 需求3: 会话持久化** (第2933-2970行)
-  - SQLite存储完整AppState
-  - 支持1000+并发会话
-  - 恢复时间<500ms
-  - CLI命令:`/sessions`, `/load`, `/reset`, `/current`
+#### 场景 3:KV Cache成本优化
 
-- **断点续聊** → 参见 **六、上下文管理 - 场景2: 会话断点续聊** (第2842-2870行)
-  - 完整状态恢复:messages, tools, skills, workspace
-  - 跨设备续聊(共享data/sessions.db)
-  - 自动保存策略(每轮对话后)
+**用户故事**:
+开发团队使用Agent处理100轮对话,传统方案每轮都重新计算System Prompt(5K tokens),消耗大量推理成本。
 
-### 核心特性
+**系统行为**:
+1. 系统启动时生成固定SystemMessage(分钟级时间戳)
+2. 整个会话期间SystemMessage不变
+3. 动态提醒追加到最后一条Human Message
+4. KV Cache复用率达70-90%
 
-#### CLI命令
+**成本对比**:
+- 传统方案:100轮 × 5K tokens = 500K tokens
+- 优化后:5K + 95轮 × 0.5K = 52.5K tokens
+- **成本降低90%**
+
+---
+
+### 功能需求
+
+#### 需求1:Token监控与三级阈值
+
+**需求描述**:
+实现Token使用率监控,根据三级阈值(info/warning/critical)触发不同响应策略。
+
+**阈值定义**:
+
+| 级别 | 阈值 | 行为 | 日志级别 |
+|------|------|------|---------|
+| normal | <75% | 正常执行 | INFO |
+| info | 75%-85% | 记录信息,动态加载compact_context工具 | INFO |
+| warning | 85%-95% | 警告,添加Token提醒到消息 | WARNING |
+| critical | >95% | 跳过LLM调用,触发自动压缩 | WARNING |
+
+**监控逻辑**:
+
+```python
+# generalAgent/context/token_tracker.py
+class TokenTracker:
+    def check_status(
+        self,
+        cumulative_prompt_tokens: int,
+        model_id: str
+    ) -> ContextStatus:
+        context_window = self.get_context_window(model_id)
+        usage_ratio = cumulative_prompt_tokens / context_window
+
+        if usage_ratio >= self.settings.critical_threshold:
+            return ContextStatus(
+                level="critical",
+                usage_ratio=usage_ratio,
+                message="⚠️ Token使用率>95%,触发自动压缩"
+            )
+        elif usage_ratio >= self.settings.warning_threshold:
+            return ContextStatus(
+                level="warning",
+                usage_ratio=usage_ratio,
+                message=f"⚠️ Token使用率: {usage_ratio:.1%}"
+            )
+        # ... 其他级别
+```
+
+**配置参数**(.env):
+
+```bash
+CONTEXT_INFO_THRESHOLD=0.75        # 75% 信息提示
+CONTEXT_WARNING_THRESHOLD=0.85     # 85% 警告
+CONTEXT_CRITICAL_THRESHOLD=0.95    # 95% 强制压缩
+```
+
+**验收标准**:
+- ✅ 支持三级阈值配置(0.6-0.99)
+- ✅ 实时计算usage_ratio
+- ✅ 根据阈值返回正确的ContextStatus
+- ✅ 记录完整的Token追踪日志
+
+**实现参考**:`generalAgent/context/token_tracker.py`
+
+---
+
+#### 需求2:自动上下文压缩
+
+**需求描述**:
+Token使用率>95%时自动触发LLM压缩,将旧消息总结为摘要,保留最近对话。
+
+**压缩策略**:
+
+| 策略 | 触发条件 | 保留内容 | 压缩方式 |
+|------|---------|---------|---------|
+| LLM压缩 | 首选 | 最近15% context window的消息 | LLM总结摘要 |
+| 紧急截断 | LLM压缩失败 | 最近100条消息 | 直接删除旧消息 |
+
+**保留消息计算**(混合策略):
+
+```python
+# 策略1: 基于Token比例
+keep_tokens = context_window * keep_recent_ratio  # 默认15%
+keep_message_count = estimate_messages_by_tokens(keep_tokens)
+
+# 策略2: 基于消息数量
+keep_message_count = max(keep_recent_messages, keep_message_count)  # 至少10条
+
+# 最终: 两者中先达到的
+recent_messages = messages[-keep_message_count:]
+```
+
+**LLM压缩流程**:
+
+```
+1. 确定保留消息数量(keep_recent_ratio=15% 或 keep_recent_messages=10)
+2. 分离消息:
+   - to_compress: messages[:-keep_count]
+   - recent: messages[-keep_count:]
+3. 调用LLM压缩:
+   - 提示词:"请总结以下对话内容,保留关键信息、决策、上下文"
+   - 输入: to_compress
+   - 输出: 压缩摘要(AIMessage)
+4. 重组消息:
+   - [SystemMessage, 压缩摘要, *recent_messages]
+5. 重置Token计数器
+```
+
+**压缩示例**:
+
+```
+压缩前: 302条消息(123K tokens)
+  - SystemMessage(1条)
+  - 对话历史(301条): 用户需求讨论、代码实现、测试、调试...
+
+压缩后: 13条消息(6.5K tokens, 压缩比95%)
+  - SystemMessage(1条)
+  - 压缩摘要(1条): "用户要求实现XX功能,讨论了ABC方案,最终选择..."
+  - 最近对话(11条): 保留完整上下文
+```
+
+**验收标准**:
+- ✅ Token使用率>95%时自动触发
+- ✅ 保留最近15% context window的消息(或至少10条)
+- ✅ LLM压缩失败时回退到紧急截断
+- ✅ 用户无感知(无通知消息)
+- ✅ 压缩后正确重置Token计数器
+
+**实现参考**:`generalAgent/context/compressor.py`、`generalAgent/graph/nodes/summarization.py`
+
+---
+
+#### 需求3:会话持久化
+
+**需求描述**:
+支持会话状态的保存和恢复,使用SQLite Checkpointer存储完整对话历史。
+
+**存储内容**:
+
+```python
+# 每个会话存储的状态
+{
+    "thread_id": "abc123",
+    "messages": [...],  # 消息历史
+    "mentioned_agents": [...],  # @mention记录
+    "active_skill": "pdf",
+    "workspace_path": "/data/workspace/abc123",
+    "uploaded_files": [...],
+    "todos": [...],
+    "compact_count": 2,  # 压缩次数
+    "cumulative_prompt_tokens": 45000,
+    "last_updated": "2025-10-31T12:34:56Z"
+}
+```
+
+**CLI命令**:
 
 | 命令 | 功能 | 示例 |
 |------|------|------|
-| `/sessions` | 列出所有保存的会话 | 显示session_id, 创建时间, 消息数 |
-| `/load <id>` | 加载指定会话 | `/load abc123`(支持前缀匹配) |
-| `/reset` | 重置当前会话 | 清空messages,保留配置 |
-| `/current` | 显示当前会话信息 | session_id, loops, token使用 |
-| `/clean` | 清理过期工作区 | 删除7天以上的workspace |
+| `/sessions` | 列出所有会话 | 显示ID、创建时间、消息数 |
+| `/load <id>` | 加载会话 | `/load abc` (支持前缀匹配) |
+| `/reset` | 重置当前会话 | 清空历史,重新开始 |
+| `/current` | 显示当前会话信息 | 显示thread_id、消息数、Token使用 |
 
-#### 持久化数据
+**会话列表示例**:
 
-**完整AppState保存**:
-- `messages`: 对话历史(所有消息)
-- `mentioned_agents`: @mentioned工具/技能/agents
-- `active_skill`: 当前激活技能
-- `workspace_path`: 工作区路径
-- `uploaded_files`: 已上传文件列表
-- `todos`: 任务列表
-- `loops`: 循环计数
-- `cumulative_prompt_tokens`: Token累计使用
+```
+=== 历史会话 ===
 
-**不保存**:
-- 临时状态(needs_compression等)
-- 运行时对象(model_registry等)
+1. abc123  (2025-10-30 14:23)
+   - 消息数: 45
+   - 最后活动: 1天前
+   - 技能: pdf, docx
 
-#### 性能指标
+2. def456  (2025-10-31 09:15)
+   - 消息数: 120
+   - 最后活动: 3小时前
+   - 压缩次数: 2
 
-| 指标 | 目标值 | 实际表现 |
-|------|--------|----------|
-| 恢复时间 | <500ms | ~300ms(50条消息) |
-| 并发会话 | 1000+ | SQLite支持 |
-| 存储空间 | <1MB/会话 | ~500KB(100条消息) |
-| 查询性能 | <50ms | 索引优化 |
-
-### 技术实现
-
-#### SQLite Checkpointer
-
-```python
-from langgraph.checkpoint.sqlite import SqliteSaver
-
-# 创建checkpointer
-checkpointer = SqliteSaver.from_conn_string("data/sessions.db")
-
-# 应用绑定
-app = builder.compile(checkpointer=checkpointer)
-
-# 运行时配置
-config = {"configurable": {"thread_id": session_id}}
-result = await app.ainvoke(initial_state, config=config)
+使用 /load <id> 恢复会话
 ```
 
-#### 会话ID生成
+**验收标准**:
+- ✅ 会话状态100%恢复(消息、工具、技能)
+- ✅ 支持至少1000个并发会话
+- ✅ 恢复时间<500ms
+- ✅ 支持前缀匹配加载(`/load abc`)
+- ✅ 自动保存(每轮对话后)
 
-```python
-import uuid
-
-# 生成唯一session_id
-session_id = uuid.uuid4().hex[:12]  # 12字符,足够唯一
-
-# 或使用时间戳+随机
-session_id = f"{int(time.time())}-{random.randint(1000, 9999)}"
-```
-
-#### 前缀匹配加载
-
-```python
-def load_session(prefix: str) -> str:
-    """根据前缀匹配加载会话
-
-    支持:
-    - /load abc      → 匹配 abc12345678
-    - /load abc123   → 精确匹配
-    """
-    sessions = list_all_sessions()
-    matches = [s for s in sessions if s["id"].startswith(prefix)]
-
-    if len(matches) == 0:
-        raise ValueError(f"未找到匹配的会话: {prefix}")
-    if len(matches) > 1:
-        raise ValueError(f"找到多个匹配会话: {[m['id'] for m in matches]}")
-
-    return matches[0]["id"]
-```
-
-### 与工作区的关系
-
-**会话与工作区绑定**:
-- 每个session_id对应一个workspace: `data/workspace/{session_id}/`
-- 加载会话时自动恢复workspace_path
-- 工作区独立于会话持久化(7天后自动清理)
-
-**清理策略**:
-- 会话永久保存(除非手动删除)
-- 工作区7天自动清理(释放磁盘空间)
-- 清理时保留会话记录(messages仍可查看)
-
-### 参考代码位置
-
-| 功能模块 | 文件路径 | 说明 |
-|---------|---------|------|
-| 会话存储 | `shared/session/store.py` | SessionStore实现 |
-| 会话管理器 | `shared/session/manager.py` | SessionManager生命周期 |
-| Checkpointer | `generalAgent/persistence/session_store.py` | SQLite Checkpointer配置 |
-| CLI命令 | `shared/cli/base_cli.py` | /sessions, /load, /reset |
-| 前缀匹配 | `shared/session/manager.py:load_session()` | 前缀匹配逻辑 |
-| 工作区清理 | `shared/workspace/manager.py:cleanup_old_workspaces()` | 7天过期清理 |
+**实现参考**:`shared/session/store.py`、`shared/session/manager.py`
 
 ---
 
-**参见其他章节**:
-- 六、上下文管理 - 会话持久化详细实现(第2933-2970行)
-- 九、工作区管理 - 工作区与会话的关系(第3276-3315行)
+#### 需求4:消息历史清理
+
+**需求描述**:
+自动清理无效消息,确保OpenAI API兼容性,避免因未响应的tool_calls导致错误。
+
+**清理规则**:
+
+```python
+# 移除未被响应的tool_calls
+def clean_message_history(messages):
+    # 1. 收集所有ToolMessage.tool_call_id
+    answered_calls = {
+        msg.tool_call_id
+        for msg in messages
+        if isinstance(msg, ToolMessage)
+    }
+
+    # 2. 遍历AIMessage,检查tool_calls是否有响应
+    cleaned = []
+    for msg in messages:
+        if isinstance(msg, AIMessage) and msg.tool_calls:
+            # 检查是否所有tool_calls都有响应
+            unanswered = [
+                tc for tc in msg.tool_calls
+                if tc["id"] not in answered_calls
+            ]
+
+            if unanswered:
+                continue  # 跳过这条AIMessage
+
+        cleaned.append(msg)
+
+    return cleaned
+```
+
+**安全截断策略**:
+
+```python
+# 保留AIMessage-ToolMessage对
+def truncate_messages_safely(messages, keep_recent=40):
+    # 1. 识别tool_call对
+    tool_call_pairs = {}  # tool_call_id -> (ai_idx, tool_idx)
+
+    # 2. 确定保留范围
+    cutoff_idx = len(messages) - keep_recent
+
+    # 3. 如果保留ToolMessage,必须保留对应的AIMessage
+    must_keep = set(range(cutoff_idx, len(messages)))
+
+    for i in range(cutoff_idx, len(messages)):
+        if isinstance(messages[i], ToolMessage):
+            call_id = messages[i].tool_call_id
+            if call_id in tool_call_pairs:
+                ai_idx = tool_call_pairs[call_id]["ai_idx"]
+                must_keep.add(ai_idx)
+
+    # 4. 构建结果
+    return [messages[i] for i in sorted(must_keep)]
+```
+
+**验收标准**:
+- ✅ 清理未响应的tool_calls(避免OpenAI API错误)
+- ✅ 截断时保留AIMessage-ToolMessage对
+- ✅ 始终保留SystemMessage
+- ✅ 可配置截断阈值(MAX_MESSAGE_HISTORY)
+
+**实现参考**:`generalAgent/graph/message_utils.py`
+
+---
+
+#### 需求5:KV Cache优化
+
+**需求描述**:
+优化SystemMessage和提醒机制,最大化KV Cache复用率,降低推理成本60-80%。
+
+**优化策略**:
+
+| 优化点 | 方法 | 效果 |
+|--------|------|------|
+| 固定SystemMessage | 启动时生成一次,包含分钟级时间戳 | 70-90% KV Cache复用 |
+| 动态提醒后置 | 追加到最后一条HumanMessage | 提高Cache命中率 |
+| 时间戳精度降级 | 分钟级(HH:MM)而非秒级 | 同一分钟内100%复用 |
+
+**SystemMessage结构**:
+
+```python
+# 启动时生成一次,整个会话期间不变
+static_system_prompt = f"""
+{PLANNER_SYSTEM_PROMPT}  # 固定指令
+
+{skills_catalog}  # 启用的技能列表(静态)
+
+{agents_catalog}  # 启用的Agent列表(静态)
+
+<current_datetime>{now.strftime('%Y-%m-%d %H:%M UTC')}</current_datetime>
+"""
+```
+
+**动态提醒追加**:
+
+```python
+# 错误做法(修改SystemMessage,破坏Cache)
+system_message.content += "\n\n<reminder>...</reminder>"  # ❌
+
+# 正确做法(追加到最后一条HumanMessage)
+last_human_message.content += "\n\n<system_reminder>...</system_reminder>"  # ✅
+```
+
+**成本对比**:
+
+| 场景 | 传统方式 | 优化后 | 成本降低 |
+|------|---------|--------|---------|
+| 短对话(10轮) | 100%全量计算 | 90% KV Cache复用 | 60% |
+| 长对话(100轮) | 100%全量计算 | 70% KV Cache复用 | 80% |
+
+**验收标准**:
+- ✅ SystemMessage在会话期间固定不变
+- ✅ 时间戳精度为分钟级(HH:MM UTC)
+- ✅ 动态提醒追加到最后一条HumanMessage
+- ✅ 多轮对话中KV Cache复用率≥70%
+
+**实现参考**:`generalAgent/graph/nodes/planner.py:86-107`
+
+---
+
+### 非功能需求
+
+#### 性能需求
+
+| 指标 | 目标值 | 测量方法 |
+|------|--------|---------|
+| Token追踪开销 | <10ms | extract_token_usage()耗时 |
+| 压缩耗时 | <10s | LLM压缩时间 |
+| 会话恢复 | <500ms | SQLite加载时间 |
+| KV Cache复用率 | ≥70% | 多轮对话测试 |
+
+#### 可靠性需求
+
+| 需求 | 说明 | 验收标准 |
+|------|------|----------|
+| 压缩降级策略 | LLM压缩失败时回退截断 | 异常注入测试 |
+| 会话持久化 | SQLite写入失败时继续运行 | 容错测试 |
+| Token计数准确性 | cumulative_prompt_tokens误差<5% | 对比API返回值 |
+
+#### 可用性需求
+
+| 需求 | 说明 | 验收标准 |
+|------|------|----------|
+| 压缩无感知 | 不显示压缩通知 | 用户体验测试 |
+| 会话列表清晰 | 显示ID、时间、消息数 | UI评审 |
+| 配置易读性 | .env注释完整 | 开发者5分钟上手 |
+
+---
+
+### 参考代码位置
+
+| 功能模块 | 代码路径 |
+|---------|---------|
+| 上下文管理器 | `generalAgent/context/manager.py` |
+| Token追踪器 | `generalAgent/context/token_tracker.py` |
+| 上下文压缩器 | `generalAgent/context/compressor.py` |
+| 消息截断器 | `generalAgent/context/truncator.py` |
+| 消息清理工具 | `generalAgent/graph/message_utils.py` |
+| Summarization节点 | `generalAgent/graph/nodes/summarization.py` |
+| 会话存储 | `shared/session/store.py` |
+| 会话管理器 | `shared/session/manager.py` |
+| 配置参数 | `generalAgent/config/settings.py:ContextManagementSettings` |
 
 ---
 
@@ -4635,6 +4285,631 @@ response = await invoke_subagent(
 
 ---
 
+# 8. 多Agent协作
+
+### 产品定位
+
+多Agent协作是框架的任务分发层,支持主Agent将复杂任务委派给专用子Agent或不同类型的Agent执行。通过`delegate_task`(同类型副本)和`call_agent`(不同类型Agent)两种机制,实现任务隔离、上下文继承、结果聚合的完整协作流程。
+
+**价值主张**:
+- **任务隔离**:Subagent独立上下文,避免污染主对话历史(100+轮对话场景)
+- **能力复用**:继承主Agent的工具、技能、工作区,无需重复配置
+- **类型切换**:根据任务特征选择SimpleAgent(快速)或GeneralAgent(复杂)
+- **透明协作**:Subagent执行对用户可见,支持实时流式输出
+
+**两种协作机制对比**:
+
+| 维度 | delegate_task | call_agent |
+|------|---------------|------------|
+| **调用对象** | 调用自身副本(同类型) | 调用其他类型Agent |
+| **使用场景** | 深度研究、批量处理、反复调试 | 快速分析、不同能力 |
+| **上下文** | 独立(继承工具/技能/工作区) | 独立(可选继承) |
+| **状态管理** | 有状态(GeneralAgent) | 无状态(SimpleAgent)或有状态 |
+| **实现方式** | LangGraph子图执行 | 直接调用Agent工厂 |
+| **返回结果** | JSON(ok, result, loops) | Command对象(更新父状态) |
+
+---
+
+### 核心场景
+
+#### 场景 1:深度研究任务(delegate_task)
+
+**用户故事**:
+用户询问"Python 3.13有哪些新特性?",主Agent需要执行多次搜索、文档阅读、对比分析。
+
+**系统行为**:
+1. 主Agent检测到需要多轮迭代的研究任务
+2. 调用`delegate_task("搜索并总结Python 3.13新特性...")`
+3. 创建subagent独立上下文(context_id: subagent-abc123)
+4. Subagent继承:
+   - 主Agent的@mentioned工具(如fetch_web)
+   - 主Agent的工作区路径
+   - 主Agent的技能
+5. Subagent执行:
+   - Loop 1: 搜索Python 3.13官方文档
+   - Loop 2: 提取关键特性列表
+   - Loop 3: 搜索社区反馈
+   - Loop 4: 对比3.12差异
+   - Loop 5: 生成总结报告
+6. 返回结果给主Agent
+7. 主Agent将结果整合到回复中
+
+**关键点**:
+- Subagent执行10+轮loop,但不污染主对话
+- 继承工具(fetch_web)无需重新@mention
+- 实时流式输出(用户可见subagent进度)
+
+---
+
+#### 场景 2:快速代码审查(call_agent)
+
+**用户故事**:
+用户要求"分析uploads/script.py的复杂度",主Agent(GeneralAgent)决定使用轻量级SimpleAgent快速完成。
+
+**系统行为**:
+1. 主Agent检测到简单分析任务
+2. 调用`call_agent(agent_id="simple", task="分析script.py复杂度...")`
+3. 系统加载SimpleAgent:
+   - 无状态,单次推理
+   - 启动时间<100ms
+4. SimpleAgent执行:
+   - 读取文件内容
+   - 使用reasoning模型分析
+   - 返回复杂度评估
+5. 返回Command对象更新主Agent状态
+6. 主Agent接收结果并回复用户
+
+**关键点**:
+- SimpleAgent响应速度快(3秒 vs GeneralAgent 10秒+)
+- 无需创建会话和工作区
+- 适合高频调用场景
+
+---
+
+#### 场景 3:批量文件处理(delegate_task)
+
+**用户故事**:
+用户要求"分析uploads/目录下所有Python文件,找出使用deprecated API的地方"
+
+**系统行为**:
+1. 主Agent扫描目录,发现50个Python文件
+2. 调用`delegate_task("扫描50个文件,记录deprecated API使用...")`
+3. Subagent继承主Agent的工作区
+4. Subagent执行:
+   - Loop 1-50: 逐个读取文件
+   - Loop 51-100: 搜索deprecated关键字
+   - Loop 101: 生成Markdown表格汇总
+5. 返回结果:[文件路径 | 行号 | API名称 | 建议替换]
+6. 主Agent展示表格给用户
+
+**关键点**:
+- 100+次工具调用不污染主对话
+- Subagent可以访问相同工作区
+- 结果格式化由subagent完成
+
+---
+
+### 功能需求
+
+#### 需求 1:delegate_task工具(同类型副本)
+
+**功能描述**:
+将复杂子任务委派给独立的subagent执行,适合需要多轮迭代、大量中间结果的任务。
+
+**工具签名**:
+```python
+@tool
+async def delegate_task(
+    task: str,
+    max_loops: int = 50,
+    config: Annotated[dict, InjectedToolArg] = None,
+) -> str:
+    """委派独立子任务给专用子agent执行"""
+```
+
+**参数说明**:
+- `task`: 自包含的任务描述(必须包含:目标、上下文、期望格式)
+- `max_loops`: 子agent最大循环次数(默认50)
+- `config`: 注入的配置(由LangGraph自动提供)
+
+**执行流程**:
+1. 生成唯一context_id: `subagent-{uuid[:8]}`
+2. 从parent_state_store获取父状态
+3. 继承父Agent状态:
+   - `mentioned_agents`: 继承@mentioned工具列表
+   - `active_skill`: 继承当前激活技能
+   - `workspace_path`: 继承工作区路径
+   - `uploaded_files`: 继承已上传文件列表
+4. 创建独立delegated_state:
+   - `messages`: [HumanMessage(task)]
+   - `context_id`: subagent-xxx
+   - `parent_context`: 父Agent的context_id
+5. 调用app_graph.astream()执行subagent
+6. 实时打印subagent输出(流式)
+7. 提取最后一条AIMessage作为结果
+8. 返回JSON:
+   ```json
+   {
+       "ok": true,
+       "result": "任务执行结果...",
+       "loops": 15,
+       "context_id": "subagent-abc123"
+   }
+   ```
+
+**继承规则**:
+- ✅ 继承:`mentioned_agents`, `active_skill`, `workspace_path`, `uploaded_files`
+- ❌ 不继承:`messages`(独立对话历史), `todos`(独立任务列表)
+
+**验收标准**:
+- ✅ Subagent看不到主对话历史(独立上下文)
+- ✅ Subagent可以使用主Agent @mentioned的工具
+- ✅ Subagent可以访问主Agent的工作区文件
+- ✅ 支持实时流式输出(用户可见进度)
+- ✅ 返回JSON包含ok/result/loops字段
+
+**参考代码位置**:
+- `generalAgent/tools/builtin/delegate_task.py:38-200` - delegate_task实现
+- `generalAgent/graph/nodes/planner.py:360-376` - 父状态存储
+- `generalAgent/tools/builtin/delegate_task.py:29-35` - set_parent_state()
+
+---
+
+#### 需求 2:call_agent工具(跨类型调用)
+
+**功能描述**:
+调用其他类型Agent执行任务,基于Agent Card标准(A2A Protocol)实现能力发现和调用。
+
+**工具签名**:
+```python
+@tool
+async def call_agent(
+    agent_id: str,
+    task: str,
+    max_loops: Optional[int] = None,
+    template: Optional[str] = None,
+    tools: Optional[list[str]] = None,
+    model_type: Optional[str] = None,
+    state: Annotated[dict, InjectedState] = None,
+    tool_call_id: Annotated[str, InjectedToolCallId] = None,
+) -> Command:
+    """调用其他agent执行任务"""
+```
+
+**参数说明**:
+- `agent_id`: Agent ID(如"simple", "general")
+- `task`: 任务描述(必须详细,目标agent无法访问调用者历史)
+- `max_loops`: 最大循环次数(仅对GeneralAgent有效)
+- `template`: Prompt模板(仅对SimpleAgent有效)
+- `tools`: 工具列表(仅对SimpleAgent有效)
+- `model_type`: 模型类型(base/reasoning/code等)
+
+**支持的Agent类型**:
+
+**SimpleAgent** (`agent_id="simple"`):
+- 特点:无状态、单次调用、快速响应
+- Skills:
+  - `quick_analysis`: 快速分析单个文件(<100行代码)
+  - `reasoning_task`: 使用推理模型解决数学/逻辑问题
+  - `code_review`: 快速代码审查(语法/风格/安全)
+- 配置:`enabled: true`, `available_to_subagent: true`
+
+**GeneralAgent** (`agent_id="general"`):
+- 特点:有状态、多轮对话、技能系统
+- Skills:
+  - `complex_document_analysis`: 分析大型文档(>10页PDF/DOCX)
+  - `skill_based_task`: 使用技能包的任务(@pdf/@docx等)
+  - `multi_step_research`: 多步骤研究任务
+- 配置:`enabled: false`, `available_to_subagent: false`(防止无限递归)
+
+**执行流程**:
+1. 检查agent_registry是否初始化
+2. 验证agent_id是否存在
+3. 检查agent是否enabled或通过@mention激活
+4. 根据agent类型调用对应工厂:
+   - SimpleAgent: 调用`SimpleAgent.execute()`
+   - GeneralAgent: 调用`build_application()`并执行
+5. 返回Command对象:
+   ```python
+   Command(
+       update={
+           "messages": [ToolMessage(content=result, tool_call_id=tool_call_id)]
+       }
+   )
+   ```
+
+**与delegate_task的区别**:
+- `delegate_task`: 调用自身副本,继承状态,适合深度迭代
+- `call_agent`: 调用不同类型Agent,能力切换,适合快速任务
+
+**验收标准**:
+- ✅ 支持调用SimpleAgent和GeneralAgent
+- ✅ Agent不存在时返回清晰错误提示
+- ✅ 支持SimpleAgent的template/tools参数
+- ✅ 返回Command对象更新父状态
+- ✅ 支持@mention动态加载agent
+
+**参考代码位置**:
+- `generalAgent/tools/builtin/call_agent.py:38-200` - call_agent实现
+- `generalAgent/agents/registry.py` - AgentRegistry
+- `generalAgent/agents/handoff_tools.py` - transfer_to_{agent_id}自动生成
+- `generalAgent/config/agents.yaml` - Agent配置
+
+---
+
+#### 需求 3:Agent Card标准(A2A Protocol)
+
+**功能描述**:
+基于A2A Protocol定义Agent元数据标准,支持能力发现、技能查询、自动文档生成。
+
+**Agent Card结构**:
+```python
+@dataclass
+class AgentCard:
+    # Identity
+    id: str                    # Agent唯一标识
+    name: str                  # 显示名称
+    description: str           # 简短描述
+    provider: str              # 提供方(local/remote)
+    version: str               # 版本号
+
+    # Service Endpoint
+    factory_path: str          # 工厂函数路径
+
+    # Capabilities (能力特性)
+    capabilities: List[Capability]
+    # 示例: stateless, fast, single_turn, template_support
+
+    # Skills (技能清单) ⭐ 核心部分
+    skills: List[Skill]
+    # 每个skill包含: name, description, input_mode, output_mode, examples, parameters
+
+    # Metadata
+    tags: List[str]            # 标签
+    enabled: bool              # 是否启用
+    always_available: bool     # 是否全局可用
+    available_to_subagent: bool  # 子agent是否可调用
+```
+
+**Skill定义**:
+```python
+@dataclass
+class Skill:
+    name: str                  # 技能名称
+    description: str           # 详细描述
+    input_mode: str            # text | json | structured | multimodal
+    output_mode: str           # text | json | markdown | stream
+    examples: List[str]        # 使用示例
+    parameters: Dict[str, str] # 参数说明
+```
+
+**配置示例**(agents.yaml):
+```yaml
+optional:
+  simple:
+    name: "SimpleAgent"
+    description: "轻量级Agent,适合快速执行简单任务"
+    provider: "local"
+    version: "1.0.0"
+    factory_path: "simpleAgent.simple_agent:SimpleAgent"
+
+    capabilities:
+      - name: "stateless"
+        description: "无状态,不保留会话历史"
+      - name: "fast"
+        description: "快速响应,无需初始化开销"
+
+    skills:
+      - name: "quick_analysis"
+        description: "快速分析单个文件"
+        input_mode: "text"
+        output_mode: "markdown"
+        examples:
+          - "分析uploads/script.py的复杂度"
+        parameters:
+          file_path: "要分析的文件路径"
+
+    tags: ["lightweight", "stateless", "fast"]
+    enabled: true
+    available_to_subagent: true
+```
+
+**验收标准**:
+- ✅ AgentCard包含完整的identity/endpoint/capabilities/skills信息
+- ✅ Skills包含examples和parameters便于LLM理解
+- ✅ 支持从agents.yaml自动加载AgentCard
+- ✅ AgentRegistry提供查询接口(by id/skill/tag)
+
+**参考代码位置**:
+- `generalAgent/agents/schema.py` - AgentCard/Skill/Capability定义
+- `generalAgent/config/agents.yaml` - Agent配置文件
+- `generalAgent/agents/scanner.py` - 自动扫描和加载
+
+---
+
+#### 需求 4:AgentRegistry注册表
+
+**功能描述**:
+AgentRegistry负责管理所有Agent的元数据,提供发现、查询、catalog生成功能。
+
+**核心方法**:
+
+**4.1 注册与查询**
+```python
+class AgentRegistry:
+    def register(self, card: AgentCard):
+        """注册Agent Card"""
+
+    def get(self, agent_id: str) -> AgentCard:
+        """根据ID获取Agent Card"""
+
+    def is_discovered(self, agent_id: str) -> bool:
+        """检查Agent是否被发现"""
+
+    def is_enabled(self, agent_id: str) -> bool:
+        """检查Agent是否启用"""
+```
+
+**4.2 列表查询**
+```python
+    def list_discovered(self) -> List[AgentCard]:
+        """列出所有已发现的agents"""
+
+    def list_enabled(self) -> List[AgentCard]:
+        """列出所有启用的agents"""
+
+    def list_by_skill(self, skill_name: str) -> List[AgentCard]:
+        """根据skill查询agents"""
+
+    def list_by_tag(self, tag: str) -> List[AgentCard]:
+        """根据tag查询agents"""
+```
+
+**4.3 Catalog生成**
+```python
+    def get_catalog_text(self, mode: str = "compact") -> str:
+        """生成agents catalog文本
+
+        Args:
+            mode: compact(精简) | detailed(详细)
+
+        Returns:
+            用于SystemMessage的catalog文本
+        """
+```
+
+**Catalog格式**:
+
+**Compact模式**(默认,节省tokens):
+```markdown
+## 可用 Agents
+
+- **simple**: 轻量级Agent,适合快速执行简单任务
+- **general**: 完整功能的Agent,支持技能、多轮对话(当前禁用)
+```
+
+**Detailed模式**(@mention时显示):
+```markdown
+## SimpleAgent (@simple)
+
+**能力**:
+- stateless: 无状态,不保留会话历史
+- fast: 快速响应,无需初始化开销
+
+**技能**:
+1. quick_analysis - 快速分析单个文件
+   - 示例:"分析uploads/script.py的复杂度"
+2. reasoning_task - 使用推理模型解决数学/逻辑问题
+   - 示例:"计算fibonacci(100)"
+```
+
+**验收标准**:
+- ✅ 支持三层架构:discovered → enabled → mentioned
+- ✅ Catalog默认精简模式(减少SystemMessage tokens)
+- ✅ @mention时动态显示详细技能信息
+- ✅ 支持by_skill/by_tag查询
+
+**参考代码位置**:
+- `generalAgent/agents/registry.py` - AgentRegistry实现
+- `generalAgent/agents/scanner.py:scan_agents_from_config()` - 自动加载
+
+---
+
+#### 需求 5:Handoff Pattern实现
+
+**功能描述**:
+为每个enabled agent自动生成`transfer_to_{agent_id}`工具,支持LangGraph的Handoff Pattern。
+
+**自动生成逻辑**:
+```python
+def generate_handoff_tool(agent_id: str, card: AgentCard) -> BaseTool:
+    """为agent生成transfer_to_{agent_id}工具
+
+    示例: transfer_to_simple, transfer_to_general
+    """
+    @tool
+    async def transfer_tool(task: str) -> Command:
+        # 调用call_agent
+        return await call_agent(agent_id=agent_id, task=task, ...)
+
+    transfer_tool.name = f"transfer_to_{agent_id}"
+    transfer_tool.description = f"转交任务给{card.name}: {card.description}"
+    return transfer_tool
+```
+
+**使用场景**:
+1. **用户显式@mention**:
+   ```
+   User> @simple 分析script.py
+   System> [加载SimpleAgent,显示详细技能]
+          [生成transfer_to_simple工具]
+   LLM> [调用transfer_to_simple("分析script.py...")]
+   ```
+
+2. **LLM自主选择**:
+   ```
+   User> 快速分析一下这段代码
+   LLM> [检测到"快速"关键词]
+        [选择transfer_to_simple工具]
+        [调用SimpleAgent执行]
+   ```
+
+**Handoff Flow**:
+```
+Main Agent → LLM决策 → transfer_to_{agent_id}
+                      ↓
+                  call_agent()
+                      ↓
+                  Target Agent执行
+                      ↓
+                  返回Command(update state)
+                      ↓
+                  Main Agent继续
+```
+
+**验收标准**:
+- ✅ 每个enabled agent自动生成transfer_to工具
+- ✅ @mention时动态加载transfer_to工具
+- ✅ 工具描述包含agent的能力和技能
+- ✅ 返回Command对象更新父状态
+
+**参考代码位置**:
+- `generalAgent/agents/handoff_tools.py` - generate_handoff_tool()
+- `generalAgent/graph/nodes/planner.py:150-180` - 动态加载handoff工具
+
+---
+
+#### 需求 6:上下文隔离与继承
+
+**功能描述**:
+Subagent拥有独立context_id,与父Agent隔离,但可以选择性继承工具、技能、工作区。
+
+**隔离机制**:
+
+**AppState.context_id字段**:
+- 主Agent: `context_id = "main"`
+- Subagent: `context_id = "subagent-{uuid[:8]}"`
+- 用于区分不同执行上下文
+
+**AppState.parent_context字段**:
+- Subagent记录父Agent的context_id
+- 用于追踪调用链: main → subagent-abc → subagent-xyz
+
+**继承规则**:
+
+**delegate_task继承**(同类型):
+```python
+delegated_state = {
+    "context_id": "subagent-abc123",
+    "parent_context": parent_state.get("context_id", "main"),
+
+    # ✅ 继承
+    "mentioned_agents": list(parent_mentioned_agents),
+    "active_skill": parent_active_skill,
+    "workspace_path": parent_workspace,
+    "uploaded_files": list(parent_uploaded_files),
+
+    # ❌ 独立
+    "messages": [HumanMessage(task)],  # 独立对话历史
+    "todos": [],                        # 独立任务列表
+    "loops": 0,                         # 独立循环计数
+}
+```
+
+**call_agent继承**(跨类型):
+- SimpleAgent: 不继承(无状态,每次全新创建)
+- GeneralAgent: 可选继承(通过参数控制)
+
+**验收标准**:
+- ✅ Subagent看不到主对话历史(messages独立)
+- ✅ Subagent可以使用主Agent的工具(@mentioned)
+- ✅ Subagent可以访问主Agent的工作区
+- ✅ 支持context_id追踪调用链
+
+**参考代码位置**:
+- `generalAgent/graph/state.py:40-42` - context_id/parent_context定义
+- `generalAgent/tools/builtin/delegate_task.py:106-125` - 继承逻辑
+- `generalAgent/tools/builtin/delegate_task.py:29-35` - 父状态存储
+
+---
+
+#### 需求 7:流式输出与进度可见
+
+**功能描述**:
+Subagent执行过程实时流式输出,用户可以看到进度和中间结果。
+
+**实现方式**:
+
+**delegate_task流式输出**:
+```python
+# 使用astream实时获取状态快照
+async for state_snapshot in app_graph.astream(
+    delegated_state,
+    config=config,
+    stream_mode="values"
+):
+    final_state = state_snapshot
+
+    # 打印新消息
+    current_messages = state_snapshot.get("messages", [])
+    for idx in range(message_count, len(current_messages)):
+        msg = current_messages[idx]
+        if hasattr(msg, "content"):
+            content = str(msg.content)
+            print(f"[subagent] {content[:200]}...")
+```
+
+**输出示例**:
+```
+[subagent-abc123] Starting execution...
+[subagent] Loop 1: 正在搜索Python 3.13文档...
+[subagent] Loop 2: 找到15个新特性
+[subagent] Loop 3: 正在分析PEP提案...
+[subagent] Loop 4: 生成对比表格...
+[subagent] Completed in 4 loops
+```
+
+**call_agent输出**:
+- SimpleAgent: 单次输出(无loop)
+- GeneralAgent: 支持流式输出(如果实现)
+
+**验收标准**:
+- ✅ Subagent每条消息实时打印
+- ✅ 显示context_id便于追踪
+- ✅ 显示loop计数和完成状态
+- ✅ 长内容自动截断(前200字符)
+
+**参考代码位置**:
+- `generalAgent/tools/builtin/delegate_task.py:136-165` - 流式输出实现
+- `generalAgent/cli.py:180-250` - CLI流式输出集成
+
+---
+
+### 参考代码位置
+
+| 功能模块 | 文件路径 | 说明 |
+|---------|---------|------|
+| delegate_task工具 | `generalAgent/tools/builtin/delegate_task.py` | 同类型副本委派 |
+| call_agent工具 | `generalAgent/tools/builtin/call_agent.py` | 跨类型agent调用 |
+| AgentCard定义 | `generalAgent/agents/schema.py` | A2A Protocol标准 |
+| AgentRegistry | `generalAgent/agents/registry.py` | Agent注册表 |
+| Agent扫描器 | `generalAgent/agents/scanner.py` | 自动加载agents.yaml |
+| Handoff工具生成 | `generalAgent/agents/handoff_tools.py` | transfer_to_{agent_id} |
+| Agent配置 | `generalAgent/config/agents.yaml` | Agent Card配置 |
+| SimpleAgent实现 | `simpleAgent/simple_agent.py` | SimpleAgent核心逻辑 |
+| SimpleAgent Graph | `simpleAgent/graph/builder.py` | SimpleAgent LangGraph |
+| Planner父状态存储 | `generalAgent/graph/nodes/planner.py:360-376` | set_parent_state() |
+| AppState定义 | `generalAgent/graph/state.py:40-42` | context_id/parent_context |
+| CLI流式输出 | `generalAgent/cli.py:180-250` | Subagent输出集成 |
+
+---
+
+**参见其他章节**:
+- 三、Agent 模板系统 - SimpleAgent和GeneralAgent详细定义
+- 一、工具系统 - 工具继承和available_to_subagent机制
+- 四、Agent 流程与状态管理 - AppState结构和context_id隔离
+
+---
 
 # 9. Agent 模板系统
 
@@ -5431,1065 +5706,1359 @@ def transfer_to_simple(task: str) -> str:
 
 ---
 
-# 8. 多Agent协作
+# 10. 工作区管理
 
 ### 产品定位
 
-多Agent协作是框架的任务分发层,支持主Agent将复杂任务委派给专用子Agent或不同类型的Agent执行。通过`delegate_task`(同类型副本)和`call_agent`(不同类型Agent)两种机制,实现任务隔离、上下文继承、结果聚合的完整协作流程。
+**需要提供本地沙箱。**
 
-**价值主张**:
-- **任务隔离**:Subagent独立上下文,避免污染主对话历史(100+轮对话场景)
-- **能力复用**:继承主Agent的工具、技能、工作区,无需重复配置
-- **类型切换**:根据任务特征选择SimpleAgent(快速)或GeneralAgent(复杂)
-- **透明协作**:Subagent执行对用户可见,支持实时流式输出
+工作区管理是框架的文件隔离层,为每个会话提供独立的文件空间,支持技能链接、文件上传、输出隔离。通过WorkspaceManager实现路径安全、自动清理、依赖安装等功能。
 
-**两种协作机制对比**:
+### 主要功能
 
-| 维度 | delegate_task | call_agent |
-|------|---------------|------------|
-| **调用对象** | 调用自身副本(同类型) | 调用其他类型Agent |
-| **使用场景** | 深度研究、批量处理、反复调试 | 快速分析、不同能力 |
-| **上下文** | 独立(继承工具/技能/工作区) | 独立(可选继承) |
-| **状态管理** | 有状态(GeneralAgent) | 无状态(SimpleAgent)或有状态 |
-| **实现方式** | LangGraph子图执行 | 直接调用Agent工厂 |
-| **返回结果** | JSON(ok, result, loops) | Command对象(更新父状态) |
+工作区管理的详细功能已在以下章节中涵盖:
 
----
+- **工作区结构** → 参见 **二、技能系统 - 工作区隔离** (第402-410行)
+  - `workspace/{session_id}/skills/` - 技能符号链接(只读)
+  - `workspace/{session_id}/uploads/` - 用户上传文件
+  - `workspace/{session_id}/outputs/` - Agent生成输出
+  - `workspace/{session_id}/temp/` - 临时文件
 
-### 核心场景
+- **技能链接机制** → 参见 **二、技能系统 - 需求4: 技能工作区链接** (第402-425行)
+  - 符号链接创建
+  - 依赖自动安装
+  - 路径安全检查
 
-#### 场景 1:深度研究任务(delegate_task)
+- **工具路径限制** → 参见 **一、工具系统 - 需求5: 文件操作工具集** (第90-160行)
+  - write_file只能写outputs/和temp/
+  - read_file可以读skills/和uploads/
+  - 路径安全验证
 
-**用户故事**:
-用户询问"Python 3.13有哪些新特性?",主Agent需要执行多次搜索、文档阅读、对比分析。
-
-**系统行为**:
-1. 主Agent检测到需要多轮迭代的研究任务
-2. 调用`delegate_task("搜索并总结Python 3.13新特性...")`
-3. 创建subagent独立上下文(context_id: subagent-abc123)
-4. Subagent继承:
-   - 主Agent的@mentioned工具(如fetch_web)
-   - 主Agent的工作区路径
-   - 主Agent的技能
-5. Subagent执行:
-   - Loop 1: 搜索Python 3.13官方文档
-   - Loop 2: 提取关键特性列表
-   - Loop 3: 搜索社区反馈
-   - Loop 4: 对比3.12差异
-   - Loop 5: 生成总结报告
-6. 返回结果给主Agent
-7. 主Agent将结果整合到回复中
-
-**关键点**:
-- Subagent执行10+轮loop,但不污染主对话
-- 继承工具(fetch_web)无需重新@mention
-- 实时流式输出(用户可见subagent进度)
-
----
-
-#### 场景 2:快速代码审查(call_agent)
-
-**用户故事**:
-用户要求"分析uploads/script.py的复杂度",主Agent(GeneralAgent)决定使用轻量级SimpleAgent快速完成。
-
-**系统行为**:
-1. 主Agent检测到简单分析任务
-2. 调用`call_agent(agent_id="simple", task="分析script.py复杂度...")`
-3. 系统加载SimpleAgent:
-   - 无状态,单次推理
-   - 启动时间<100ms
-4. SimpleAgent执行:
-   - 读取文件内容
-   - 使用reasoning模型分析
-   - 返回复杂度评估
-5. 返回Command对象更新主Agent状态
-6. 主Agent接收结果并回复用户
-
-**关键点**:
-- SimpleAgent响应速度快(3秒 vs GeneralAgent 10秒+)
-- 无需创建会话和工作区
-- 适合高频调用场景
-
----
-
-#### 场景 3:批量文件处理(delegate_task)
-
-**用户故事**:
-用户要求"分析uploads/目录下所有Python文件,找出使用deprecated API的地方"
-
-**系统行为**:
-1. 主Agent扫描目录,发现50个Python文件
-2. 调用`delegate_task("扫描50个文件,记录deprecated API使用...")`
-3. Subagent继承主Agent的工作区
-4. Subagent执行:
-   - Loop 1-50: 逐个读取文件
-   - Loop 51-100: 搜索deprecated关键字
-   - Loop 101: 生成Markdown表格汇总
-5. 返回结果:[文件路径 | 行号 | API名称 | 建议替换]
-6. 主Agent展示表格给用户
-
-**关键点**:
-- 100+次工具调用不污染主对话
-- Subagent可以访问相同工作区
-- 结果格式化由subagent完成
-
----
-
-### 功能需求
-
-#### 需求 1:delegate_task工具(同类型副本)
-
-**功能描述**:
-将复杂子任务委派给独立的subagent执行,适合需要多轮迭代、大量中间结果的任务。
-
-**工具签名**:
-```python
-@tool
-async def delegate_task(
-    task: str,
-    max_loops: int = 50,
-    config: Annotated[dict, InjectedToolArg] = None,
-) -> str:
-    """委派独立子任务给专用子agent执行"""
-```
-
-**参数说明**:
-- `task`: 自包含的任务描述(必须包含:目标、上下文、期望格式)
-- `max_loops`: 子agent最大循环次数(默认50)
-- `config`: 注入的配置(由LangGraph自动提供)
-
-**执行流程**:
-1. 生成唯一context_id: `subagent-{uuid[:8]}`
-2. 从parent_state_store获取父状态
-3. 继承父Agent状态:
-   - `mentioned_agents`: 继承@mentioned工具列表
-   - `active_skill`: 继承当前激活技能
-   - `workspace_path`: 继承工作区路径
-   - `uploaded_files`: 继承已上传文件列表
-4. 创建独立delegated_state:
-   - `messages`: [HumanMessage(task)]
-   - `context_id`: subagent-xxx
-   - `parent_context`: 父Agent的context_id
-5. 调用app_graph.astream()执行subagent
-6. 实时打印subagent输出(流式)
-7. 提取最后一条AIMessage作为结果
-8. 返回JSON:
-   ```json
-   {
-       "ok": true,
-       "result": "任务执行结果...",
-       "loops": 15,
-       "context_id": "subagent-abc123"
-   }
-   ```
-
-**继承规则**:
-- ✅ 继承:`mentioned_agents`, `active_skill`, `workspace_path`, `uploaded_files`
-- ❌ 不继承:`messages`(独立对话历史), `todos`(独立任务列表)
-
-**验收标准**:
-- ✅ Subagent看不到主对话历史(独立上下文)
-- ✅ Subagent可以使用主Agent @mentioned的工具
-- ✅ Subagent可以访问主Agent的工作区文件
-- ✅ 支持实时流式输出(用户可见进度)
-- ✅ 返回JSON包含ok/result/loops字段
-
-**参考代码位置**:
-- `generalAgent/tools/builtin/delegate_task.py:38-200` - delegate_task实现
-- `generalAgent/graph/nodes/planner.py:360-376` - 父状态存储
-- `generalAgent/tools/builtin/delegate_task.py:29-35` - set_parent_state()
-
----
-
-#### 需求 2:call_agent工具(跨类型调用)
-
-**功能描述**:
-调用其他类型Agent执行任务,基于Agent Card标准(A2A Protocol)实现能力发现和调用。
-
-**工具签名**:
-```python
-@tool
-async def call_agent(
-    agent_id: str,
-    task: str,
-    max_loops: Optional[int] = None,
-    template: Optional[str] = None,
-    tools: Optional[list[str]] = None,
-    model_type: Optional[str] = None,
-    state: Annotated[dict, InjectedState] = None,
-    tool_call_id: Annotated[str, InjectedToolCallId] = None,
-) -> Command:
-    """调用其他agent执行任务"""
-```
-
-**参数说明**:
-- `agent_id`: Agent ID(如"simple", "general")
-- `task`: 任务描述(必须详细,目标agent无法访问调用者历史)
-- `max_loops`: 最大循环次数(仅对GeneralAgent有效)
-- `template`: Prompt模板(仅对SimpleAgent有效)
-- `tools`: 工具列表(仅对SimpleAgent有效)
-- `model_type`: 模型类型(base/reasoning/code等)
-
-**支持的Agent类型**:
-
-**SimpleAgent** (`agent_id="simple"`):
-- 特点:无状态、单次调用、快速响应
-- Skills:
-  - `quick_analysis`: 快速分析单个文件(<100行代码)
-  - `reasoning_task`: 使用推理模型解决数学/逻辑问题
-  - `code_review`: 快速代码审查(语法/风格/安全)
-- 配置:`enabled: true`, `available_to_subagent: true`
-
-**GeneralAgent** (`agent_id="general"`):
-- 特点:有状态、多轮对话、技能系统
-- Skills:
-  - `complex_document_analysis`: 分析大型文档(>10页PDF/DOCX)
-  - `skill_based_task`: 使用技能包的任务(@pdf/@docx等)
-  - `multi_step_research`: 多步骤研究任务
-- 配置:`enabled: false`, `available_to_subagent: false`(防止无限递归)
-
-**执行流程**:
-1. 检查agent_registry是否初始化
-2. 验证agent_id是否存在
-3. 检查agent是否enabled或通过@mention激活
-4. 根据agent类型调用对应工厂:
-   - SimpleAgent: 调用`SimpleAgent.execute()`
-   - GeneralAgent: 调用`build_application()`并执行
-5. 返回Command对象:
-   ```python
-   Command(
-       update={
-           "messages": [ToolMessage(content=result, tool_call_id=tool_call_id)]
-       }
-   )
-   ```
-
-**与delegate_task的区别**:
-- `delegate_task`: 调用自身副本,继承状态,适合深度迭代
-- `call_agent`: 调用不同类型Agent,能力切换,适合快速任务
-
-**验收标准**:
-- ✅ 支持调用SimpleAgent和GeneralAgent
-- ✅ Agent不存在时返回清晰错误提示
-- ✅ 支持SimpleAgent的template/tools参数
-- ✅ 返回Command对象更新父状态
-- ✅ 支持@mention动态加载agent
-
-**参考代码位置**:
-- `generalAgent/tools/builtin/call_agent.py:38-200` - call_agent实现
-- `generalAgent/agents/registry.py` - AgentRegistry
-- `generalAgent/agents/handoff_tools.py` - transfer_to_{agent_id}自动生成
-- `generalAgent/config/agents.yaml` - Agent配置
-
----
-
-#### 需求 3:Agent Card标准(A2A Protocol)
-
-**功能描述**:
-基于A2A Protocol定义Agent元数据标准,支持能力发现、技能查询、自动文档生成。
-
-**Agent Card结构**:
-```python
-@dataclass
-class AgentCard:
-    # Identity
-    id: str                    # Agent唯一标识
-    name: str                  # 显示名称
-    description: str           # 简短描述
-    provider: str              # 提供方(local/remote)
-    version: str               # 版本号
-
-    # Service Endpoint
-    factory_path: str          # 工厂函数路径
-
-    # Capabilities (能力特性)
-    capabilities: List[Capability]
-    # 示例: stateless, fast, single_turn, template_support
-
-    # Skills (技能清单) ⭐ 核心部分
-    skills: List[Skill]
-    # 每个skill包含: name, description, input_mode, output_mode, examples, parameters
-
-    # Metadata
-    tags: List[str]            # 标签
-    enabled: bool              # 是否启用
-    always_available: bool     # 是否全局可用
-    available_to_subagent: bool  # 子agent是否可调用
-```
-
-**Skill定义**:
-```python
-@dataclass
-class Skill:
-    name: str                  # 技能名称
-    description: str           # 详细描述
-    input_mode: str            # text | json | structured | multimodal
-    output_mode: str           # text | json | markdown | stream
-    examples: List[str]        # 使用示例
-    parameters: Dict[str, str] # 参数说明
-```
-
-**配置示例**(agents.yaml):
-```yaml
-optional:
-  simple:
-    name: "SimpleAgent"
-    description: "轻量级Agent,适合快速执行简单任务"
-    provider: "local"
-    version: "1.0.0"
-    factory_path: "simpleAgent.simple_agent:SimpleAgent"
-
-    capabilities:
-      - name: "stateless"
-        description: "无状态,不保留会话历史"
-      - name: "fast"
-        description: "快速响应,无需初始化开销"
-
-    skills:
-      - name: "quick_analysis"
-        description: "快速分析单个文件"
-        input_mode: "text"
-        output_mode: "markdown"
-        examples:
-          - "分析uploads/script.py的复杂度"
-        parameters:
-          file_path: "要分析的文件路径"
-
-    tags: ["lightweight", "stateless", "fast"]
-    enabled: true
-    available_to_subagent: true
-```
-
-**验收标准**:
-- ✅ AgentCard包含完整的identity/endpoint/capabilities/skills信息
-- ✅ Skills包含examples和parameters便于LLM理解
-- ✅ 支持从agents.yaml自动加载AgentCard
-- ✅ AgentRegistry提供查询接口(by id/skill/tag)
-
-**参考代码位置**:
-- `generalAgent/agents/schema.py` - AgentCard/Skill/Capability定义
-- `generalAgent/config/agents.yaml` - Agent配置文件
-- `generalAgent/agents/scanner.py` - 自动扫描和加载
-
----
-
-#### 需求 4:AgentRegistry注册表
-
-**功能描述**:
-AgentRegistry负责管理所有Agent的元数据,提供发现、查询、catalog生成功能。
-
-**核心方法**:
-
-**4.1 注册与查询**
-```python
-class AgentRegistry:
-    def register(self, card: AgentCard):
-        """注册Agent Card"""
-
-    def get(self, agent_id: str) -> AgentCard:
-        """根据ID获取Agent Card"""
-
-    def is_discovered(self, agent_id: str) -> bool:
-        """检查Agent是否被发现"""
-
-    def is_enabled(self, agent_id: str) -> bool:
-        """检查Agent是否启用"""
-```
-
-**4.2 列表查询**
-```python
-    def list_discovered(self) -> List[AgentCard]:
-        """列出所有已发现的agents"""
-
-    def list_enabled(self) -> List[AgentCard]:
-        """列出所有启用的agents"""
-
-    def list_by_skill(self, skill_name: str) -> List[AgentCard]:
-        """根据skill查询agents"""
-
-    def list_by_tag(self, tag: str) -> List[AgentCard]:
-        """根据tag查询agents"""
-```
-
-**4.3 Catalog生成**
-```python
-    def get_catalog_text(self, mode: str = "compact") -> str:
-        """生成agents catalog文本
-
-        Args:
-            mode: compact(精简) | detailed(详细)
-
-        Returns:
-            用于SystemMessage的catalog文本
-        """
-```
-
-**Catalog格式**:
-
-**Compact模式**(默认,节省tokens):
-```markdown
-## 可用 Agents
-
-- **simple**: 轻量级Agent,适合快速执行简单任务
-- **general**: 完整功能的Agent,支持技能、多轮对话(当前禁用)
-```
-
-**Detailed模式**(@mention时显示):
-```markdown
-## SimpleAgent (@simple)
-
-**能力**:
-- stateless: 无状态,不保留会话历史
-- fast: 快速响应,无需初始化开销
-
-**技能**:
-1. quick_analysis - 快速分析单个文件
-   - 示例:"分析uploads/script.py的复杂度"
-2. reasoning_task - 使用推理模型解决数学/逻辑问题
-   - 示例:"计算fibonacci(100)"
-```
-
-**验收标准**:
-- ✅ 支持三层架构:discovered → enabled → mentioned
-- ✅ Catalog默认精简模式(减少SystemMessage tokens)
-- ✅ @mention时动态显示详细技能信息
-- ✅ 支持by_skill/by_tag查询
-
-**参考代码位置**:
-- `generalAgent/agents/registry.py` - AgentRegistry实现
-- `generalAgent/agents/scanner.py:scan_agents_from_config()` - 自动加载
-
----
-
-#### 需求 5:Handoff Pattern实现
-
-**功能描述**:
-为每个enabled agent自动生成`transfer_to_{agent_id}`工具,支持LangGraph的Handoff Pattern。
-
-**自动生成逻辑**:
-```python
-def generate_handoff_tool(agent_id: str, card: AgentCard) -> BaseTool:
-    """为agent生成transfer_to_{agent_id}工具
-
-    示例: transfer_to_simple, transfer_to_general
-    """
-    @tool
-    async def transfer_tool(task: str) -> Command:
-        # 调用call_agent
-        return await call_agent(agent_id=agent_id, task=task, ...)
-
-    transfer_tool.name = f"transfer_to_{agent_id}"
-    transfer_tool.description = f"转交任务给{card.name}: {card.description}"
-    return transfer_tool
-```
-
-**使用场景**:
-1. **用户显式@mention**:
-   ```
-   User> @simple 分析script.py
-   System> [加载SimpleAgent,显示详细技能]
-          [生成transfer_to_simple工具]
-   LLM> [调用transfer_to_simple("分析script.py...")]
-   ```
-
-2. **LLM自主选择**:
-   ```
-   User> 快速分析一下这段代码
-   LLM> [检测到"快速"关键词]
-        [选择transfer_to_simple工具]
-        [调用SimpleAgent执行]
-   ```
-
-**Handoff Flow**:
-```
-Main Agent → LLM决策 → transfer_to_{agent_id}
-                      ↓
-                  call_agent()
-                      ↓
-                  Target Agent执行
-                      ↓
-                  返回Command(update state)
-                      ↓
-                  Main Agent继续
-```
-
-**验收标准**:
-- ✅ 每个enabled agent自动生成transfer_to工具
-- ✅ @mention时动态加载transfer_to工具
-- ✅ 工具描述包含agent的能力和技能
-- ✅ 返回Command对象更新父状态
-
-**参考代码位置**:
-- `generalAgent/agents/handoff_tools.py` - generate_handoff_tool()
-- `generalAgent/graph/nodes/planner.py:150-180` - 动态加载handoff工具
-
----
-
-#### 需求 6:上下文隔离与继承
-
-**功能描述**:
-Subagent拥有独立context_id,与父Agent隔离,但可以选择性继承工具、技能、工作区。
-
-**隔离机制**:
-
-**AppState.context_id字段**:
-- 主Agent: `context_id = "main"`
-- Subagent: `context_id = "subagent-{uuid[:8]}"`
-- 用于区分不同执行上下文
-
-**AppState.parent_context字段**:
-- Subagent记录父Agent的context_id
-- 用于追踪调用链: main → subagent-abc → subagent-xyz
-
-**继承规则**:
-
-**delegate_task继承**(同类型):
-```python
-delegated_state = {
-    "context_id": "subagent-abc123",
-    "parent_context": parent_state.get("context_id", "main"),
-
-    # ✅ 继承
-    "mentioned_agents": list(parent_mentioned_agents),
-    "active_skill": parent_active_skill,
-    "workspace_path": parent_workspace,
-    "uploaded_files": list(parent_uploaded_files),
-
-    # ❌ 独立
-    "messages": [HumanMessage(task)],  # 独立对话历史
-    "todos": [],                        # 独立任务列表
-    "loops": 0,                         # 独立循环计数
-}
-```
-
-**call_agent继承**(跨类型):
-- SimpleAgent: 不继承(无状态,每次全新创建)
-- GeneralAgent: 可选继承(通过参数控制)
-
-**验收标准**:
-- ✅ Subagent看不到主对话历史(messages独立)
-- ✅ Subagent可以使用主Agent的工具(@mentioned)
-- ✅ Subagent可以访问主Agent的工作区
-- ✅ 支持context_id追踪调用链
-
-**参考代码位置**:
-- `generalAgent/graph/state.py:40-42` - context_id/parent_context定义
-- `generalAgent/tools/builtin/delegate_task.py:106-125` - 继承逻辑
-- `generalAgent/tools/builtin/delegate_task.py:29-35` - 父状态存储
-
----
-
-#### 需求 7:流式输出与进度可见
-
-**功能描述**:
-Subagent执行过程实时流式输出,用户可以看到进度和中间结果。
-
-**实现方式**:
-
-**delegate_task流式输出**:
-```python
-# 使用astream实时获取状态快照
-async for state_snapshot in app_graph.astream(
-    delegated_state,
-    config=config,
-    stream_mode="values"
-):
-    final_state = state_snapshot
-
-    # 打印新消息
-    current_messages = state_snapshot.get("messages", [])
-    for idx in range(message_count, len(current_messages)):
-        msg = current_messages[idx]
-        if hasattr(msg, "content"):
-            content = str(msg.content)
-            print(f"[subagent] {content[:200]}...")
-```
-
-**输出示例**:
-```
-[subagent-abc123] Starting execution...
-[subagent] Loop 1: 正在搜索Python 3.13文档...
-[subagent] Loop 2: 找到15个新特性
-[subagent] Loop 3: 正在分析PEP提案...
-[subagent] Loop 4: 生成对比表格...
-[subagent] Completed in 4 loops
-```
-
-**call_agent输出**:
-- SimpleAgent: 单次输出(无loop)
-- GeneralAgent: 支持流式输出(如果实现)
-
-**验收标准**:
-- ✅ Subagent每条消息实时打印
-- ✅ 显示context_id便于追踪
-- ✅ 显示loop计数和完成状态
-- ✅ 长内容自动截断(前200字符)
-
-**参考代码位置**:
-- `generalAgent/tools/builtin/delegate_task.py:136-165` - 流式输出实现
-- `generalAgent/cli.py:180-250` - CLI流式输出集成
-
----
+- **工作区继承** → 参见 **八、多Agent协作 - 需求6: 上下文隔离与继承** (第1797-1847行)
+  - Subagent继承主Agent的workspace_path
+  - 共享uploads/和outputs/目录
 
 ### 参考代码位置
 
 | 功能模块 | 文件路径 | 说明 |
 |---------|---------|------|
-| delegate_task工具 | `generalAgent/tools/builtin/delegate_task.py` | 同类型副本委派 |
-| call_agent工具 | `generalAgent/tools/builtin/call_agent.py` | 跨类型agent调用 |
-| AgentCard定义 | `generalAgent/agents/schema.py` | A2A Protocol标准 |
-| AgentRegistry | `generalAgent/agents/registry.py` | Agent注册表 |
-| Agent扫描器 | `generalAgent/agents/scanner.py` | 自动加载agents.yaml |
-| Handoff工具生成 | `generalAgent/agents/handoff_tools.py` | transfer_to_{agent_id} |
-| Agent配置 | `generalAgent/config/agents.yaml` | Agent Card配置 |
-| SimpleAgent实现 | `simpleAgent/simple_agent.py` | SimpleAgent核心逻辑 |
-| SimpleAgent Graph | `simpleAgent/graph/builder.py` | SimpleAgent LangGraph |
-| Planner父状态存储 | `generalAgent/graph/nodes/planner.py:360-376` | set_parent_state() |
-| AppState定义 | `generalAgent/graph/state.py:40-42` | context_id/parent_context |
-| CLI流式输出 | `generalAgent/cli.py:180-250` | Subagent输出集成 |
+| WorkspaceManager | `shared/workspace/manager.py` | 工作区生命周期管理 |
+| 技能链接 | `shared/workspace/manager.py:link_skill()` | 符号链接创建 |
+| 依赖安装 | `shared/workspace/manager.py:link_skill()` | requirements.txt处理 |
+| 路径验证 | `generalAgent/tools/builtin/file_ops.py` | is_safe_path()检查 |
+| 自动清理 | `shared/workspace/manager.py:cleanup_old_workspaces()` | 7天过期清理 |
+
+---
+
+# 11. 文件处理
+
+### 产品定位
+
+文件处理是框架的I/O能力层,提供统一的文件读写、搜索、查找接口,支持多种文档格式(PDF/DOCX/XLSX/PPTX)的自动解析和索引。
+
+### 主要功能
+
+文件处理的详细功能已在以下章节中涵盖:
+
+- **文件操作工具集** → 参见 **需求5: 文件操作工具集** 
+  - `read_file`: 读取文本和文档(支持PDF/DOCX/XLSX/PPTX预览)
+  - `write_file`: 写入文件到outputs/或temp/
+  - `edit_file`: 基于diff的精确编辑
+  - `find_files`: Glob模式文件名搜索
+  - `search_file`: 全文内容搜索(支持文档索引)
+  - `list_workspace_files`: 列出工作区文件
+
+- **文档格式支持** → 参见 **read_file工具**
+  - PDF: 分页预览,前10页或全文
+  - DOCX: 段落预览,前10页或全文
+  - XLSX: 工作表预览,前3个sheet
+  - PPTX: 幻灯片预览,前15张
+  - 文本文件: 直接读取(<100KB)或截断(>100KB)
+
+- **文档索引与搜索** → 参见 **search_file工具**
+  - FTS5全文索引(SQLite)
+  - 保存完整文档供使用
+  - MD5去重(跨会话复用索引)
+  - 多策略评分:短语(10分) > 三元组(5分) > 二元组(3分) > 关键词(2分)
+  - 自动索引构建(首次2-5秒,后续<100ms)
+
+- **文件上传自动处理** → 参见 **需求2: 文件上传自动加载**
+  - 上传PDF自动加载@pdf技能
+  - 上传DOCX自动加载@docx技能
+  - 动态hints生成
+
+### 核心特性
+
+#### 文档预览策略
+
+**小文件**(≤阈值):
+- PDF/DOCX: ≤10页 → 全文返回
+- XLSX: ≤3个sheet → 全部返回
+- PPTX: ≤15张幻灯片 → 全部返回
+
+**大文件**(>阈值):
+- 返回前N页/sheet/幻灯片预览
+- 提示使用search_file搜索具体内容
+- 避免Token浪费
+
+#### 索引管理
+
+**全局索引存储**:
+- 路径: `data/indexes/{md5[:2]}/{md5}.db`
+- 两级目录结构(避免单目录文件过多)
+- 跨会话复用(相同内容共享索引)
+
+**自动清理**:
+- 文件替换时删除旧索引(MD5变化)
+- 定期清理孤儿索引(24小时未访问)
+
+### 参考代码位置
+
+| 功能模块 | 文件路径 | 说明 |
+|---------|---------|------|
+| 文件操作工具 | `generalAgent/tools/builtin/file_ops.py` | read/write/edit/list |
+| 文件查找 | `generalAgent/tools/builtin/find_files.py` | Glob模式搜索 |
+| 文件搜索 | `generalAgent/tools/builtin/search_file.py` | 全文搜索+索引 |
+| 文档提取器 | `generalAgent/utils/document_extractors.py` | PDF/DOCX/XLSX/PPTX解析 |
+| 文本索引器 | `generalAgent/utils/text_indexer.py` | FTS5索引构建 |
+| 索引管理器 | `generalAgent/utils/text_indexer.py:TextIndexManager` | MD5去重、自动清理 |
+
+---
+
+# 12. 会话管理
+
+### 产品定位
+
+会话管理是框架的持久化层,负责保存和恢复完整的对话状态,支持断点续聊、多会话并发、快速切换。通过SQLite Checkpointer实现轻量级持久化,恢复时间<500ms。
+
+### 主要功能
+
+会话管理的详细功能已在 **上下文管理** 章节中涵盖:
+
+- **会话持久化** → 参见 **上下文管理 - 需求3: 会话持久化**
+  - SQLite存储完整AppState
+  - 支持1000+并发会话
+  - 恢复时间<500ms
+  - CLI命令:`/sessions`, `/load`, `/reset`, `/current`
+
+- **断点续聊** → 参见 **六、上下文管理 - 场景2: 会话断点续聊**
+  - 完整状态恢复:messages, tools, skills, workspace
+  - 跨设备续聊(共享data/sessions.db)
+  - 自动保存策略(每轮对话后)
+
+### 核心特性
+
+#### CLI命令
+
+| 命令 | 功能 | 示例 |
+|------|------|------|
+| `/sessions` | 列出所有保存的会话 | 显示session_id, 创建时间, 消息数 |
+| `/load <id>` | 加载指定会话 | `/load abc123`(支持前缀匹配) |
+| `/reset` | 重置当前会话 | 清空messages,保留配置 |
+| `/current` | 显示当前会话信息 | session_id, loops, token使用 |
+| `/clean` | 清理过期工作区 | 删除7天以上的workspace |
+
+#### 持久化数据
+
+**完整AppState保存**:
+- `messages`: 对话历史(所有消息)
+- `mentioned_agents`: @mentioned工具/技能/agents
+- `active_skill`: 当前激活技能
+- `workspace_path`: 工作区路径
+- `uploaded_files`: 已上传文件列表
+- `todos`: 任务列表
+- `loops`: 循环计数
+- `cumulative_prompt_tokens`: Token累计使用
+
+**不保存**:
+- 临时状态(needs_compression等)
+- 运行时对象(model_registry等)
+
+### 技术实现
+
+#### SQLite Checkpointer
+
+```python
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+# 创建checkpointer
+checkpointer = SqliteSaver.from_conn_string("data/sessions.db")
+
+# 应用绑定
+app = builder.compile(checkpointer=checkpointer)
+
+# 运行时配置
+config = {"configurable": {"thread_id": session_id}}
+result = await app.ainvoke(initial_state, config=config)
+```
+
+#### 会话ID生成
+
+```python
+import uuid
+
+# 生成唯一session_id
+session_id = uuid.uuid4().hex[:12]  # 12字符,足够唯一
+
+# 或使用时间戳+随机
+session_id = f"{int(time.time())}-{random.randint(1000, 9999)}"
+```
+
+#### 前缀匹配加载
+
+```python
+def load_session(prefix: str) -> str:
+    """根据前缀匹配加载会话
+
+    支持:
+    - /load abc      → 匹配 abc12345678
+    - /load abc123   → 精确匹配
+    """
+    sessions = list_all_sessions()
+    matches = [s for s in sessions if s["id"].startswith(prefix)]
+
+    if len(matches) == 0:
+        raise ValueError(f"未找到匹配的会话: {prefix}")
+    if len(matches) > 1:
+        raise ValueError(f"找到多个匹配会话: {[m['id'] for m in matches]}")
+
+    return matches[0]["id"]
+```
+
+### 与工作区的关系
+
+**会话与工作区绑定**:
+- 每个session_id对应一个workspace: `data/workspace/{session_id}/`
+- 加载会话时自动恢复workspace_path
+- 工作区独立于会话持久化(7天后自动清理)
+
+**清理策略**:
+- 会话永久保存(除非手动删除)
+- 工作区7天自动清理(释放磁盘空间)
+- 清理时保留会话记录(messages仍可查看)
+
+### 参考代码位置
+
+| 功能模块 | 文件路径 | 说明 |
+|---------|---------|------|
+| 会话存储 | `shared/session/store.py` | SessionStore实现 |
+| 会话管理器 | `shared/session/manager.py` | SessionManager生命周期 |
+| Checkpointer | `generalAgent/persistence/session_store.py` | SQLite Checkpointer配置 |
+| CLI命令 | `shared/cli/base_cli.py` | /sessions, /load, /reset |
+| 前缀匹配 | `shared/session/manager.py:load_session()` | 前缀匹配逻辑 |
+| 工作区清理 | `shared/workspace/manager.py:cleanup_old_workspaces()` | 7天过期清理 |
 
 ---
 
 **参见其他章节**:
-- 三、Agent 模板系统 - SimpleAgent和GeneralAgent详细定义
-- 一、工具系统 - 工具继承和available_to_subagent机制
-- 四、Agent 流程与状态管理 - AppState结构和context_id隔离
+- 六、上下文管理 - 会话持久化详细实现(第2933-2970行)
+- 九、工作区管理 - 工作区与会话的关系(第3276-3315行)
 
 ---
 
-# 6. 上下文管理
+# 13. 安全与合规
 
-### 产品定位
+## 概述
 
-上下文管理是框架的智能优化层,负责监控 Token 使用、自动压缩历史、管理会话持久化。通过三级阈值监控(75%/85%/95%)和 LLM 压缩策略,在不中断对话的情况下释放 Token 空间,降低API成本60-80%,同时保证对话语义完整性。
+AgentGraph 框架将安全和隐私保护作为核心设计原则，通过多层防护机制确保用户数据安全、防止恶意操作、保护敏感信息。框架采用**纵深防御**策略，在工具执行、文件访问、网络请求、数据存储等各个环节实施安全控制。
 
-**价值主张**:
-- **成本优化**:KV Cache 优化降低60-80%推理成本,自动压缩减少 Token 消耗
-- **用户无感**:压缩过程静默执行,无通知打扰,对话体验连续
-- **智能平衡**:LLM 压缩保留语义,紧急截断保证可靠性
-- **会话持久化**:SQLite 存储支持断点续聊,恢复时间<500ms
-
----
-
-### 核心场景
-
-#### 场景 1:长对话自动优化
-
-**用户故事**:
-用户与Agent进行300轮对话(~120K tokens),系统需要在不中断对话的情况下释放Token空间。
-
-**系统行为**:
-1. Planner节点检测Token使用率达到95%
-2. 自动路由到Summarization节点
-3. LLM将前290条消息压缩为1条摘要
-4. 保留最近10条消息
-5. 返回Planner节点继续执行
-
-**关键点**:
-- 用户无感知(无压缩通知)
-- 压缩比高达95%
-- 对话语义完整保留
+**安全架构三大支柱**：
+1. **HITL 人机协同** - 危险操作需人工审批
+2. **工作区隔离** - 文件系统沙箱隔离
+3. **配置化安全** - 灵活的安全策略配置
 
 ---
 
-#### 场景 2:会话断点续聊
+## 1. 威胁模型与防护策略
 
-**用户故事**:
-用户在办公室与Agent讨论项目需求(50轮对话),关闭应用后回家继续讨论,系统需要完整恢复上下文。
+### 1.1 识别的威胁
 
-**系统行为**:
-1. 用户使用`/sessions`命令查看历史会话
-2. 选择会话ID: `abc123`
-3. 使用`/load abc123`加载会话
-4. 系统从SQLite恢复:消息历史、工具状态、技能、工作区路径
-5. 用户继续提问,Agent理解之前的上下文
-
-**关键点**:
-- 恢复时间<500ms
-- 100%状态恢复
-- 支持1000+并发会话
+| 威胁类型 | 描述 | 严重程度 | 防护措施 |
+|---------|------|---------|---------|
+| **命令注入** | Agent 执行恶意 Shell 命令 | Critical | HITL 审批 + 命令白名单 |
+| **文件系统破坏** | 删除/修改系统文件 | Critical | 工作区隔离 + 路径验证 |
+| **敏感信息泄露** | API Key/密码泄露到日志/网络 | Critical | 全局风险模式检测 |
+| **路径遍历** | 访问 workspace 外的文件 | High | 路径规范化 + 安全检查 |
+| **无限循环** | Agent 陷入死循环消耗资源 | High | max_loops 限制 |
+| **Prompt 注入** | 用户输入篡改 Agent 行为 | Medium | Jinja2 沙箱 + 参数化 |
+| **网络攻击** | 请求内网/恶意站点 | Medium | HITL 审批 + URL 检测 |
+| **数据泄露** | 会话数据被非授权访问 | Medium | 本地 SQLite + 文件权限 |
 
 ---
 
-#### 场景 3:KV Cache成本优化
+## 2. HITL 人机协同防护
 
-**用户故事**:
-开发团队使用Agent处理100轮对话,传统方案每轮都重新计算System Prompt(5K tokens),消耗大量推理成本。
+### 2.1 四层审批架构
 
-**系统行为**:
-1. 系统启动时生成固定SystemMessage(分钟级时间戳)
-2. 整个会话期间SystemMessage不变
-3. 动态提醒追加到最后一条Human Message
-4. KV Cache复用率达70-90%
+**优先级**: 工具自定义检查器 > 全局风险模式 > 工具特定规则 > 内置默认规则
 
-**成本对比**:
-- 传统方案:100轮 × 5K tokens = 500K tokens
-- 优化后:5K + 95轮 × 0.5K = 52.5K tokens
-- **成本降低90%**
-
----
-
-### 功能需求
-
-#### 需求1:Token监控与三级阈值
-
-**需求描述**:
-实现Token使用率监控,根据三级阈值(info/warning/critical)触发不同响应策略。
-
-**阈值定义**:
-
-| 级别 | 阈值 | 行为 | 日志级别 |
-|------|------|------|---------|
-| normal | <75% | 正常执行 | INFO |
-| info | 75%-85% | 记录信息,动态加载compact_context工具 | INFO |
-| warning | 85%-95% | 警告,添加Token提醒到消息 | WARNING |
-| critical | >95% | 跳过LLM调用,触发自动压缩 | WARNING |
-
-**监控逻辑**:
-
-```python
-# generalAgent/context/token_tracker.py
-class TokenTracker:
-    def check_status(
-        self,
-        cumulative_prompt_tokens: int,
-        model_id: str
-    ) -> ContextStatus:
-        context_window = self.get_context_window(model_id)
-        usage_ratio = cumulative_prompt_tokens / context_window
-
-        if usage_ratio >= self.settings.critical_threshold:
-            return ContextStatus(
-                level="critical",
-                usage_ratio=usage_ratio,
-                message="⚠️ Token使用率>95%,触发自动压缩"
-            )
-        elif usage_ratio >= self.settings.warning_threshold:
-            return ContextStatus(
-                level="warning",
-                usage_ratio=usage_ratio,
-                message=f"⚠️ Token使用率: {usage_ratio:.1%}"
-            )
-        # ... 其他级别
+```
+┌─────────────────────────────────────────┐
+│ Layer 1: 工具自定义检查器（代码实现）      │  最高优先级
+│ - 例: check_bash_command(args)          │  复杂逻辑
+│ - 返回: ApprovalDecision                │
+├─────────────────────────────────────────┤
+│ Layer 2: 全局风险模式（跨工具检测）       │  次高优先级
+│ - 敏感信息: password, api_key, token    │  适用所有工具
+│ - 系统文件: /etc/passwd, ~/.ssh/        │
+├─────────────────────────────────────────┤
+│ Layer 3: 工具特定规则（hitl_rules.yaml） │  中优先级
+│ - run_bash_command.patterns.high_risk  │  工具级控制
+│ - http_fetch.patterns.medium_risk      │
+├─────────────────────────────────────────┤
+│ Layer 4: 内置默认规则（兜底逻辑）         │  最低优先级
+│ - 常见危险命令: rm -rf, sudo, chmod 777 │  基础保护
+└─────────────────────────────────────────┘
 ```
 
-**配置参数**(.env):
+### 2.2 全局风险模式
+
+**Critical（严重风险）** - 敏感信息泄露：
+
+```yaml
+critical:
+  patterns:
+    - "password\\s*[=:]\\s*['\"]?[\\w.-]+"        # 密码明文
+    - "api[_-]?key\\s*[=:]\\s*['\"]?[\\w-]+"      # API Key
+    - "secret\\s*[=:]\\s*['\"]?[\\w.-]+"          # Secret
+    - "token\\s*[=:]\\s*['\"]?[\\w.-]+"           # Token
+    - "private[_-]?key"                           # 私钥
+    - "BEGIN (RSA|DSA|EC) PRIVATE KEY"            # PEM 格式私钥
+  action: require_approval
+  reason: "检测到敏感信息（密码/密钥/令牌）"
+```
+
+**High（高风险）** - 系统文件和危险操作：
+
+```yaml
+high:
+  patterns:
+    - "/etc/passwd"                               # 系统用户文件
+    - "/etc/shadow"                               # 系统密码文件
+    - "~/.ssh/id_rsa"                            # SSH 私钥
+    - "~/.aws/credentials"                        # AWS 凭证
+    - "DROP\\s+(TABLE|DATABASE)"                  # SQL 删除
+    - "DELETE\\s+FROM.*WHERE\\s+1=1"             # SQL 批量删除
+  action: require_approval
+  reason: "检测到高风险操作（系统文件/数据库删除）"
+```
+
+**Medium（中等风险）** - 可疑模式：
+
+```yaml
+medium:
+  patterns:
+    - "https?://[^/]*\\d+\\.\\d+\\.\\d+\\.\\d+"  # IP 地址 URL
+    - "\\bexec\\s*\\("                            # 代码执行
+    - "\\beval\\s*\\("                            # 动态执行
+    - "\\.env$"                                   # 环境变量文件
+  action: require_approval
+  reason: "检测到可疑模式（代码执行/环境变量）"
+```
+
+### 2.3 工具特定规则
+
+**run_bash_command** 审批规则：
+
+```yaml
+run_bash_command:
+  enabled: true
+  patterns:
+    high_risk:
+      - "rm\\s+-rf"            # 强制删除
+      - "sudo"                 # 提权操作
+      - "chmod\\s+777"         # 危险权限
+      - "mkfs"                 # 格式化磁盘
+      - "dd.*if=/dev/"         # 磁盘写入
+    medium_risk:
+      - "curl"                 # 网络请求
+      - "wget"                 # 下载文件
+      - "pip\\s+install"       # 安装包
+  actions:
+    high_risk: require_approval
+    medium_risk: require_approval
+```
+
+**http_fetch** 审批规则：
+
+```yaml
+http_fetch:
+  enabled: true
+  rules:
+    - pattern: "localhost|127\\.0\\.0\\.1"       # 本地地址
+      action: require_approval
+      reason: "访问本地服务"
+    - pattern: "192\\.168\\.|10\\."              # 内网地址
+      action: require_approval
+      reason: "访问内网地址"
+```
+
+### 2.4 审批用户体验
+
+**极简版审批界面**（对 LLM 透明）：
+
+```
+🛡️  工具审批: run_bash_command
+   风险级别: high
+   原因: 检测到高风险操作
+   命令: rm -rf /tmp/cache
+   批准? [y/n] > n
+
+❌ 操作已取消
+```
+
+**关键设计**：
+- ✅ 审批决策**不进入对话历史**（LLM 无感知）
+- ✅ 用户可**批准/拒绝**操作
+- ✅ 拒绝后 Agent 自动调整策略
+- ✅ 完整的审批日志记录
+
+**配置路径**: `generalAgent/config/hitl_rules.yaml`
+
+---
+
+## 3. 工作区隔离与文件安全
+
+### 3.1 工作区架构
+
+每个会话拥有独立的文件系统沙箱：
+
+```
+data/workspace/{session_id}/
+├── skills/           # 符号链接（只读）
+│   └── pdf/
+│       ├── SKILL.md
+│       └── scripts/
+├── uploads/          # 用户上传（可读写）
+├── outputs/          # Agent 生成输出（可读写）
+└── temp/             # 临时文件（可读写）
+```
+
+### 3.2 文件访问安全策略
+
+| 操作 | 允许路径 | 禁止路径 | 验证方式 |
+|------|---------|---------|---------|
+| **读取** | `workspace/**/*` | `workspace/` 外的任何路径 | `_validate_workspace_path()` |
+| **写入** | `outputs/`, `temp/`, `uploads/` | `skills/`, `workspace/` 外 | `_validate_write_path()` |
+| **执行** | `skills/*/scripts/*.py` | 其他所有路径 | `_validate_script_path()` |
+| **删除** | `outputs/`, `temp/` | `skills/`, `uploads/` | `_validate_delete_path()` |
+
+### 3.3 路径安全实现
+
+**路径规范化**（防止路径遍历）：
+
+```python
+def _validate_workspace_path(self, file_path: str) -> Path:
+    """验证路径是否在 workspace 内（防止 ../ 攻击）"""
+    # 1. 解析为绝对路径
+    abs_path = (self.workspace_path / file_path).resolve()
+
+    # 2. 检查是否在 workspace 内
+    if not abs_path.is_relative_to(self.workspace_path):
+        raise SecurityError(f"Path outside workspace: {file_path}")
+
+    # 3. 检查符号链接（防止软链接逃逸）
+    if abs_path.is_symlink():
+        real_path = abs_path.readlink()
+        if not real_path.is_relative_to(self.workspace_path):
+            raise SecurityError(f"Symlink escape detected: {file_path}")
+
+    return abs_path
+```
+
+**写入路径限制**：
+
+```python
+def _validate_write_path(self, file_path: str) -> Path:
+    """验证写入路径（只允许 outputs/、temp/、uploads/）"""
+    abs_path = self._validate_workspace_path(file_path)
+
+    # 允许的写入目录
+    allowed_dirs = ["outputs", "temp", "uploads"]
+
+    # 检查路径是否在允许的目录下
+    relative_path = abs_path.relative_to(self.workspace_path)
+    if relative_path.parts[0] not in allowed_dirs:
+        raise SecurityError(
+            f"Write not allowed: {file_path}. "
+            f"Only allowed in: {', '.join(allowed_dirs)}"
+        )
+
+    return abs_path
+```
+
+### 3.4 技能脚本执行安全
+
+**隔离执行环境**：
+
+```python
+def execute_skill_script(self, script_path: str, args: list[str]) -> str:
+    """执行技能脚本（受限环境）"""
+    # 1. 验证脚本路径（必须在 skills/*/scripts/ 下）
+    abs_script = self._validate_script_path(script_path)
+
+    # 2. 设置环境变量（隔离）
+    env = os.environ.copy()
+    env["AGENT_WORKSPACE_PATH"] = str(self.workspace_path)
+    env["PYTHONPATH"] = str(self.workspace_path)  # 限制 import
+
+    # 3. 执行脚本（超时保护）
+    result = subprocess.run(
+        ["python", abs_script, *args],
+        cwd=self.workspace_path,    # 限制工作目录
+        env=env,                     # 隔离环境变量
+        timeout=30,                  # 超时限制
+        capture_output=True,
+        text=True
+    )
+
+    return result.stdout
+```
+
+---
+
+## 5. 数据隐私保护
+
+### 5.1 本地优先原则
+
+**数据存储策略**：
+
+| 数据类型 | 存储位置 | 加密 | 访问控制 |
+|---------|---------|------|---------|
+| **会话历史** | `data/sessions.db` (SQLite) | ❌ 明文 | 文件系统权限 |
+| **工作区文件** | `data/workspace/{session_id}/` | ❌ 明文 | 目录权限 + 路径隔离 |
+| **日志文件** | `logs/` | ❌ 明文 | 文件系统权限 |
+| **配置文件** | `.env`, `*.yaml` | ❌ 明文 | 文件系统权限 |
+| **API Keys** | `.env` (环境变量) | ❌ 明文 | 文件系统权限 + `.gitignore` |
+
+**关键原则**：
+- ✅ **本地存储** - 所有数据保存在本地，不上传云端
+- ✅ **文件权限** - 依赖操作系统文件权限（`chmod 600`）
+- ✅ **`.gitignore`** - 敏感文件（`.env`, `data/`, `logs/`）排除版本控制
+- ⚠️ **无加密** - 当前版本不提供静态数据加密（未来可选）
+
+### 5.2 日志脱敏
+
+**敏感信息过滤**：
+
+```python
+def sanitize_log_message(self, message: str) -> str:
+    """日志脱敏（移除敏感信息）"""
+    # 1. API Key 脱敏
+    message = re.sub(
+        r"(api[_-]?key['\"]?\s*[:=]\s*['\"]?)[\w-]+",
+        r"\1***REDACTED***",
+        message,
+        flags=re.IGNORECASE
+    )
+
+    # 2. Token 脱敏
+    message = re.sub(
+        r"(token['\"]?\s*[:=]\s*['\"]?)[\w.-]+",
+        r"\1***REDACTED***",
+        message,
+        flags=re.IGNORECASE
+    )
+
+    # 3. Password 脱敏
+    message = re.sub(
+        r"(password['\"]?\s*[:=]\s*['\"]?)[\w.-]+",
+        r"\1***REDACTED***",
+        message,
+        flags=re.IGNORECASE
+    )
+
+    return message
+```
+
+### 5.3 LLM 调用隐私
+
+**Prompt Token 限制**（防止敏感信息泄露）：
+
+```python
+# generalAgent/config/settings.py
+class ObservabilitySettings(BaseSettings):
+    log_prompt_max_length: int = Field(default=500)  # 日志中 Prompt 最大长度
+```
+
+**LangSmith 追踪**（可选，默认关闭）：
 
 ```bash
-CONTEXT_INFO_THRESHOLD=0.75        # 75% 信息提示
-CONTEXT_WARNING_THRESHOLD=0.85     # 85% 警告
-CONTEXT_CRITICAL_THRESHOLD=0.95    # 95% 强制压缩
+# .env
+LANGCHAIN_TRACING_V2=false  # 默认关闭（防止敏感数据上传）
+LANGSMITH_API_KEY=          # 留空
 ```
-
-**验收标准**:
-- ✅ 支持三级阈值配置(0.6-0.99)
-- ✅ 实时计算usage_ratio
-- ✅ 根据阈值返回正确的ContextStatus
-- ✅ 记录完整的Token追踪日志
-
-**实现参考**:`generalAgent/context/token_tracker.py`
 
 ---
 
-#### 需求2:自动上下文压缩
+## 6. Prompt 安全
 
-**需求描述**:
-Token使用率>95%时自动触发LLM压缩,将旧消息总结为摘要,保留最近对话。
+### 6.1 Jinja2 沙箱模式
 
-**压缩策略**:
-
-| 策略 | 触发条件 | 保留内容 | 压缩方式 |
-|------|---------|---------|---------|
-| LLM压缩 | 首选 | 最近15% context window的消息 | LLM总结摘要 |
-| 紧急截断 | LLM压缩失败 | 最近100条消息 | 直接删除旧消息 |
-
-**保留消息计算**(混合策略):
+**防止 Prompt 注入攻击**：
 
 ```python
-# 策略1: 基于Token比例
-keep_tokens = context_window * keep_recent_ratio  # 默认15%
-keep_message_count = estimate_messages_by_tokens(keep_tokens)
+from jinja2.sandbox import SandboxedEnvironment
 
-# 策略2: 基于消息数量
-keep_message_count = max(keep_recent_messages, keep_message_count)  # 至少10条
+def render_template_safely(template: str, params: dict) -> str:
+    """使用沙箱环境渲染模板（防止代码执行）"""
+    # 使用 SandboxedEnvironment（禁止 import、exec、eval 等）
+    env = SandboxedEnvironment()
 
-# 最终: 两者中先达到的
-recent_messages = messages[-keep_message_count:]
+    # 渲染模板
+    return env.from_string(template).render(**params)
 ```
 
-**LLM压缩流程**:
+**SandboxedEnvironment 限制**：
+- ❌ 禁止 `{% import ... %}`
+- ❌ 禁止 `{% exec ... %}`
+- ❌ 禁止访问私有属性（`__xxx__`）
+- ❌ 禁止调用危险函数（`eval`, `exec`, `compile`）
 
+### 6.2 参数化 Prompt
+
+**推荐模式**（防止注入）：
+
+```python
+# ✅ 推荐：参数化
+template = "你是 {{ role }}。任务: {{ task }}"
+prompt = render_template(template, {"role": user_input, "task": task_desc})
+
+# ❌ 不推荐：字符串拼接
+prompt = f"你是 {user_input}。任务: {task_desc}"  # 可能被注入
 ```
-1. 确定保留消息数量(keep_recent_ratio=15% 或 keep_recent_messages=10)
-2. 分离消息:
-   - to_compress: messages[:-keep_count]
-   - recent: messages[-keep_count:]
-3. 调用LLM压缩:
-   - 提示词:"请总结以下对话内容,保留关键信息、决策、上下文"
-   - 输入: to_compress
-   - 输出: 压缩摘要(AIMessage)
-4. 重组消息:
-   - [SystemMessage, 压缩摘要, *recent_messages]
-5. 重置Token计数器
-```
-
-**压缩示例**:
-
-```
-压缩前: 302条消息(123K tokens)
-  - SystemMessage(1条)
-  - 对话历史(301条): 用户需求讨论、代码实现、测试、调试...
-
-压缩后: 13条消息(6.5K tokens, 压缩比95%)
-  - SystemMessage(1条)
-  - 压缩摘要(1条): "用户要求实现XX功能,讨论了ABC方案,最终选择..."
-  - 最近对话(11条): 保留完整上下文
-```
-
-**验收标准**:
-- ✅ Token使用率>95%时自动触发
-- ✅ 保留最近15% context window的消息(或至少10条)
-- ✅ LLM压缩失败时回退到紧急截断
-- ✅ 用户无感知(无通知消息)
-- ✅ 压缩后正确重置Token计数器
-
-**实现参考**:`generalAgent/context/compressor.py`、`generalAgent/graph/nodes/summarization.py`
 
 ---
 
-#### 需求3:会话持久化
+## 7. 依赖安全
 
-**需求描述**:
-支持会话状态的保存和恢复,使用SQLite Checkpointer存储完整对话历史。
+### 7.1 Python 依赖管理
 
-**存储内容**:
+**锁定依赖版本**（`uv.lock`）：
+
+```toml
+# pyproject.toml
+[project.dependencies]
+langchain = "^0.3.15"
+langgraph = "^0.2.62"
+jinja2 = "^3.1.5"
+```
+
+**安全扫描**（推荐工具）：
+
+```bash
+# 1. pip-audit - 扫描已知漏洞
+pip-audit
+
+# 2. safety - 检查不安全的依赖
+safety check
+
+# 3. bandit - 静态代码分析
+bandit -r generalAgent/
+```
+
+### 7.2 技能依赖隔离
+
+**自动依赖安装**（`skills/*/requirements.txt`）：
 
 ```python
-# 每个会话存储的状态
-{
-    "thread_id": "abc123",
-    "messages": [...],  # 消息历史
-    "mentioned_agents": [...],  # @mention记录
-    "active_skill": "pdf",
-    "workspace_path": "/data/workspace/abc123",
-    "uploaded_files": [...],
-    "todos": [...],
-    "compact_count": 2,  # 压缩次数
-    "cumulative_prompt_tokens": 45000,
-    "last_updated": "2025-10-31T12:34:56Z"
-}
+def install_skill_dependencies(self, skill_id: str) -> None:
+    """安装技能依赖（隔离安装）"""
+    requirements_file = self.skills_path / skill_id / "requirements.txt"
+
+    if requirements_file.exists():
+        # 使用虚拟环境隔离（可选）
+        subprocess.run([
+            "pip", "install", "-r", str(requirements_file),
+            "--user",  # 用户级安装（非全局）
+        ], check=True)
 ```
-
-**CLI命令**:
-
-| 命令 | 功能 | 示例 |
-|------|------|------|
-| `/sessions` | 列出所有会话 | 显示ID、创建时间、消息数 |
-| `/load <id>` | 加载会话 | `/load abc` (支持前缀匹配) |
-| `/reset` | 重置当前会话 | 清空历史,重新开始 |
-| `/current` | 显示当前会话信息 | 显示thread_id、消息数、Token使用 |
-
-**会话列表示例**:
-
-```
-=== 历史会话 ===
-
-1. abc123  (2025-10-30 14:23)
-   - 消息数: 45
-   - 最后活动: 1天前
-   - 技能: pdf, docx
-
-2. def456  (2025-10-31 09:15)
-   - 消息数: 120
-   - 最后活动: 3小时前
-   - 压缩次数: 2
-
-使用 /load <id> 恢复会话
-```
-
-**验收标准**:
-- ✅ 会话状态100%恢复(消息、工具、技能)
-- ✅ 支持至少1000个并发会话
-- ✅ 恢复时间<500ms
-- ✅ 支持前缀匹配加载(`/load abc`)
-- ✅ 自动保存(每轮对话后)
-
-**实现参考**:`shared/session/store.py`、`shared/session/manager.py`
 
 ---
 
-#### 需求4:消息历史清理
+## 8. 运行时安全
 
-**需求描述**:
-自动清理无效消息,确保OpenAI API兼容性,避免因未响应的tool_calls导致错误。
+### 8.1 循环控制
 
-**清理规则**:
+**防止无限循环**：
 
-```python
-# 移除未被响应的tool_calls
-def clean_message_history(messages):
-    # 1. 收集所有ToolMessage.tool_call_id
-    answered_calls = {
-        msg.tool_call_id
-        for msg in messages
-        if isinstance(msg, ToolMessage)
-    }
-
-    # 2. 遍历AIMessage,检查tool_calls是否有响应
-    cleaned = []
-    for msg in messages:
-        if isinstance(msg, AIMessage) and msg.tool_calls:
-            # 检查是否所有tool_calls都有响应
-            unanswered = [
-                tc for tc in msg.tool_calls
-                if tc["id"] not in answered_calls
-            ]
-
-            if unanswered:
-                continue  # 跳过这条AIMessage
-
-        cleaned.append(msg)
-
-    return cleaned
+```bash
+# .env
+MAX_LOOPS=500  # Agent Loop 最大迭代次数（1-500）
 ```
 
-**安全截断策略**:
-
 ```python
-# 保留AIMessage-ToolMessage对
-def truncate_messages_safely(messages, keep_recent=40):
-    # 1. 识别tool_call对
-    tool_call_pairs = {}  # tool_call_id -> (ai_idx, tool_idx)
+# generalAgent/graph/routing.py
+def agent_route(state: AppState) -> Literal["tools", "finalize"]:
+    """路由决策（带循环保护）"""
+    # 检查循环次数
+    if state["loops"] >= state.get("max_loops", 500):
+        logger.warning(f"Max loops reached: {state['loops']}")
+        return "finalize"  # 强制结束
 
-    # 2. 确定保留范围
-    cutoff_idx = len(messages) - keep_recent
-
-    # 3. 如果保留ToolMessage,必须保留对应的AIMessage
-    must_keep = set(range(cutoff_idx, len(messages)))
-
-    for i in range(cutoff_idx, len(messages)):
-        if isinstance(messages[i], ToolMessage):
-            call_id = messages[i].tool_call_id
-            if call_id in tool_call_pairs:
-                ai_idx = tool_call_pairs[call_id]["ai_idx"]
-                must_keep.add(ai_idx)
-
-    # 4. 构建结果
-    return [messages[i] for i in sorted(must_keep)]
+    # 正常路由逻辑
+    ...
 ```
 
-**验收标准**:
-- ✅ 清理未响应的tool_calls(避免OpenAI API错误)
-- ✅ 截断时保留AIMessage-ToolMessage对
-- ✅ 始终保留SystemMessage
-- ✅ 可配置截断阈值(MAX_MESSAGE_HISTORY)
+### 8.2 超时保护
 
-**实现参考**:`generalAgent/graph/message_utils.py`
+**工具执行超时**：
+
+```python
+# run_bash_command 工具
+result = subprocess.run(
+    command,
+    timeout=30,  # 30 秒超时
+    capture_output=True,
+    text=True
+)
+```
+
+**HTTP 请求超时**：
+
+```python
+# fetch_web 工具
+response = requests.get(url, timeout=10)  # 10 秒超时
+```
+
+### 8.3 资源限制
+
+**内存限制**（消息历史）：
+
+```bash
+# .env
+MAX_MESSAGE_HISTORY=500  # 最多保留 500 条消息
+```
+
+**工作区清理**：
+
+```bash
+# CLI 命令
+/clean  # 清理 7 天前的旧工作区
+```
 
 ---
 
-#### 需求5:KV Cache优化
+## 10. 安全事件响应
 
-**需求描述**:
-优化SystemMessage和提醒机制,最大化KV Cache复用率,降低推理成本60-80%。
+### 10.1 审批日志
 
-**优化策略**:
-
-| 优化点 | 方法 | 效果 |
-|--------|------|------|
-| 固定SystemMessage | 启动时生成一次,包含分钟级时间戳 | 70-90% KV Cache复用 |
-| 动态提醒后置 | 追加到最后一条HumanMessage | 提高Cache命中率 |
-| 时间戳精度降级 | 分钟级(HH:MM)而非秒级 | 同一分钟内100%复用 |
-
-**SystemMessage结构**:
+**审批事件记录**：
 
 ```python
-# 启动时生成一次,整个会话期间不变
-static_system_prompt = f"""
-{PLANNER_SYSTEM_PROMPT}  # 固定指令
+# generalAgent/hitl/approval_node.py
+logger.warning(
+    f"HITL Approval Required: tool={tool_name}, "
+    f"risk={decision.risk_level}, reason={decision.reason}"
+)
+```
 
-{skills_catalog}  # 启用的技能列表(静态)
+**日志格式**：
 
-{agents_catalog}  # 启用的Agent列表(静态)
+```
+2025-10-31 22:00:00 WARNING HITL Approval Required:
+  tool=run_bash_command,
+  risk=high,
+  reason=检测到高风险操作
+  args={'command': 'rm -rf /tmp/cache'}
+  user_decision=rejected
+```
 
-<current_datetime>{now.strftime('%Y-%m-%d %H:%M UTC')}</current_datetime>
+### 10.2 安全事件分类
+
+| 级别 | 事件类型 | 示例 | 响应措施 |
+|------|---------|------|---------|
+| **Critical** | 敏感信息泄露 | API Key 出现在日志 | 立即轮换密钥 + 审查日志 |
+| **High** | 系统文件访问 | 尝试读取 `/etc/passwd` | HITL 拦截 + 记录事件 |
+| **Medium** | 内网请求 | 访问 `192.168.1.1` | HITL 审批 + 用户决策 |
+| **Low** | 循环超限 | `loops >= max_loops` | 自动结束 + 日志记录 |
+
+### 10.3 事件溯源
+
+**审计日志查询**：
+
+```bash
+# 查找所有审批事件
+grep "HITL Approval" logs/*.log
+
+# 查找被拒绝的操作
+grep "user_decision=rejected" logs/*.log
+
+# 查找敏感信息检测
+grep "敏感信息" logs/*.log
+```
+
+---
+
+## 11. 已知限制与未来改进
+
+### 11.1 当前限制
+
+| 限制 | 影响 | 缓解措施 |
+|------|------|---------|
+| **无静态数据加密** | 本地文件可被直接读取 | 依赖文件系统权限 |
+| **无网络加密** | LLM API 调用依赖 HTTPS | 使用官方 SDK（自动 TLS） |
+| **无身份认证** | 单用户使用 | 多用户需外部鉴权 |
+| **无访问控制** | 所有会话可见 | 依赖操作系统用户隔离 |
+| **日志明文** | 敏感信息可能泄露 | 日志脱敏 + 定期清理 |
+
+### 11.2 未来改进方向
+
+**短期（v4.0）**：
+- [ ] 日志敏感信息自动脱敏
+- [ ] 工作区文件自动加密（可选）
+- [ ] 审批事件导出（JSON/CSV）
+
+**中期（v4.5）**：
+- [ ] 基于角色的访问控制（RBAC）
+- [ ] 多租户会话隔离
+- [ ] 审计日志可视化 Dashboard
+
+**长期（v5.0）**：
+- [ ] 端到端加密（E2EE）
+- [ ] 零知识证明（ZKP）Prompt 保护
+- [ ] 联邦学习（Federated Learning）支持
+
+---
+
+## 14. 总结
+
+AgentGraph 框架通过多层防护机制实现安全和隐私保护：
+
+**安全三大支柱**：
+1. **HITL 人机协同** - 四层审批规则拦截危险操作
+2. **工作区隔离** - 文件系统沙箱防止路径遍历
+3. **配置化安全** - 灵活的安全策略适配不同环境
+
+**隐私保护原则**：
+- ✅ **本地优先** - 所有数据保存本地
+- ✅ **最小化** - 仅收集必要信息
+- ✅ **透明** - 用户可直接访问数据
+- ✅ **可控** - 用户可删除所有数据
+
+**安全最佳实践**：
+- 生产环境关闭 `AUTO_APPROVE_WRITES`
+- 启用 HITL 全局风险模式
+- 定期运行安全扫描（`pip-audit`, `bandit`）
+- 审查审批日志，发现异常行为
+
+**持续改进**：
+框架安全特性将持续演进，欢迎社区贡献和安全研究人员的反馈。
+
+---
+
+**文档版本**: v3.6
+**最后更新**: 2025-10-31
+
+---
+
+# 14. Prompt清单
+
+## 产品定位
+
+Prompt清单章节汇总框架中所有与LLM交互的提示词,包括Agent系统提示、工具描述、技能文档模板、动态提醒和HITL交互界面,为产品经理、开发者和维护者提供完整的提示词管理参考。
+
+本章节不是实现细节,而是**Prompt资产目录**,说明"系统有哪些Prompt"和"每个Prompt的作用和位置"。
+
+### 核心价值
+
+1. **全局视图** - 一站式查看所有Prompt资源
+2. **维护指南** - 快速定位和修改Prompt
+3. **质量保证** - 确保Prompt的一致性和准确性
+4. **成本优化** - 识别冗长Prompt,优化Token消耗
+
+---
+
+## Prompt分类总览
+
+框架中的Prompt分为**5大类**:
+
+```
+Prompt清单
+├── 1. Agent系统提示 (System Prompts)
+│   ├── PLANNER_SYSTEM_PROMPT (主Agent)
+│   └── SUBAGENT_SYSTEM_PROMPT (子Agent)
+│
+├── 2. 工具描述 (Tool Descriptions)
+│   ├── Core工具 (6个)
+│   ├── Optional工具 (12个)
+│   └── MCP工具 (外部)
+│
+├── 3. 技能文档模板 (Skill Templates)
+│   ├── SKILL.md结构模板
+│   └── 6个内置技能的SKILL.md
+│
+├── 4. 动态提醒 (Dynamic Reminders)
+│   ├── TODO列表提醒
+│   ├── @mention加载提醒
+│   ├── 文件上传提醒
+│   └── 上下文压缩提醒
+│
+└── 5. HITL交互界面 (HITL UI)
+    ├── ask_human提问界面
+    └── 工具审批界面
+```
+
+**统计数据**:
+- **总Prompt数**: ~30个
+- **最大Prompt**: PLANNER_SYSTEM_PROMPT (~8000 tokens)
+- **最小Prompt**: now工具描述 (~50 tokens)
+- **总Token消耗**: ~15K tokens/轮 (包含工具描述)
+
+---
+
+## 1. Agent系统提示
+
+### 1.1 PLANNER_SYSTEM_PROMPT (主Agent)
+
+**用途**: GeneralAgent的核心系统提示,定义Agent身份、能力、工作流程和约束
+
+**位置**: `generalAgent/graph/prompts.py:PLANNER_SYSTEM_PROMPT`
+
+**结构**:
+```
+1. 身份定义 (~200 tokens)
+   - 你是GeneralAgent
+
+2. 核心能力 (~500 tokens)
+   - 工具调用
+   - 技能使用
+   - 文件操作
+   - 多模态处理
+
+3. 工作流程 (~800 tokens)
+   - Agent Loop步骤
+   - 工具可见性规则
+   - 技能加载流程
+   - delegate_task使用场景
+
+4. 技能目录 (~2000 tokens, 动态生成)
+   - enabled技能列表
+   - 每个技能的描述和用途
+   - 自动加载规则
+
+5. 约束和最佳实践 (~500 tokens)
+   - 不要使用不存在的工具
+   - 总是使用read_file读取SKILL.md
+   - 委派任务时给出详细描述
+
+6. 时间戳 (~50 tokens, 分钟级)
+   <current_datetime>2025-10-31 20:00 UTC</current_datetime>
+```
+
+**Token估算**:
+- 固定部分: ~4000 tokens
+- 技能目录: ~2000 tokens (6个技能)
+- **总计**: ~6000 tokens (会话期间不变, KV Cache友好)
+
+**关键设计**:
+- ✅ **固定内容**: 系统提示在会话初始化时生成,之后不变
+- ✅ **技能目录过滤**: 只包含`enabled: true`的技能
+
+**参考代码**: `generalAgent/graph/prompts.py:19-150`
+
+---
+
+### 1.2 SUBAGENT_SYSTEM_PROMPT (子Agent)
+
+**用途**: delegate_task创建的子Agent的系统提示,专注于单一任务执行
+
+**位置**: `generalAgent/graph/prompts.py:SUBAGENT_SYSTEM_PROMPT`
+
+**结构**:
+```
+1. 身份定义 (~150 tokens)
+   - 你是Subagent
+   - 由MainAgent委派特定任务
+
+2. 上下文说明 (~200 tokens)
+   - 你看不到主对话历史
+   - 只能看到任务描述
+
+3. 工作要求 (~300 tokens)
+   - 专注完成当前任务
+   - 生成详细总结(>200字符)
+   - 包含:做了什么、发现了什么、结果是什么
+
+4. 时间戳 (~50 tokens)
+   <current_datetime>2025-10-31 20:00 UTC</current_datetime>
+```
+
+**参考代码**: `generalAgent/graph/prompts.py:152-180`
+
+---
+
+## 2. 工具描述
+
+所有工具的描述通过LangChain的`@tool`装饰器自动生成,包含工具名称、参数说明和使用示例。
+
+**Core工具** (6个,始终可见):
+- FR-PROMPT-001: now - 获取当前UTC时间
+- FR-PROMPT-002: todo_write - 创建和更新TODO列表
+- FR-PROMPT-003: todo_read - 读取TODO列表
+- FR-PROMPT-004: delegate_task - 委派任务给子Agent
+- FR-PROMPT-005: call_agent - 调用其他类型的Agent
+- FR-PROMPT-006: ask_human - 向用户提问
+
+**Optional工具** (10个,可选加载):
+- FR-PROMPT-007: read_file - 读取文件内容
+- FR-PROMPT-008: write_file - 写入文件
+- FR-PROMPT-009: edit_file - 精确编辑文件
+- FR-PROMPT-010: find_files - 按名称查找文件
+- FR-PROMPT-011: search_file - 搜索文件内容
+- FR-PROMPT-012: list_workspace_files - 列出工作区文件
+- FR-PROMPT-013: fetch_web - 获取网页内容
+- FR-PROMPT-014: search_web - 搜索网页
+- FR-PROMPT-015: run_bash_command - 执行bash命令
+- FR-PROMPT-016: compact_context - 手动压缩上下文
+
+**工具描述示例** (now工具):
+```python
+"""Get current UTC time in ISO 8601 format.
+
+Returns:
+    str: Current UTC time (e.g., "2025-10-31T20:00:00Z")
+
+Example:
+    now() -> "2025-10-31T20:00:00Z"
 """
 ```
 
-**动态提醒追加**:
+**Token估算**:
+- Core工具: ~1200 tokens (6个 × ~200 tokens)
+- Optional工具: ~1800 tokens (10个 × ~180 tokens)
 
-```python
-# 错误做法(修改SystemMessage,破坏Cache)
-system_message.content += "\n\n<reminder>...</reminder>"  # ❌
+**参考代码**: `generalAgent/tools/builtin/*.py`
 
-# 正确做法(追加到最后一条HumanMessage)
-last_human_message.content += "\n\n<system_reminder>...</system_reminder>"  # ✅
+---
+
+## 3. 技能文档模板
+
+### 3.1 SKILL.md标准结构
+
+所有技能的SKILL.md遵循统一结构:
+
+```markdown
+  # {技能名称}
+
+  ## 概述
+  简要说明技能用途和适用场景(2-3句话)
+
+  ## 使用场景
+  - 场景1: 描述
+  - 场景2: 描述
+  - 场景3: 描述
+
+  ## 使用方法
+
+  ### 步骤1: 准备工作
+  详细说明第一步操作...
+
+  ### 步骤2: 执行任务
+  详细说明第二步操作...
+
+  ### 步骤3: 验证结果
+  如何检查任务完成情况...
+
+  ## 可用脚本
+
+  ### script1.py
+  - **用途**: 脚本功能说明
+  - **参数**:
+    - arg1: 说明
+    - arg2: 说明
+  - **示例**:
+    ```bash
+    python skills/{skill_id}/scripts/script1.py arg1 arg2
+    ```
+
+  ## 注意事项
+  - 注意点1
+  - 注意点2
+
+  ## 参考资料
+  - 链接1
+  - 链接2
 ```
 
-**成本对比**:
-
-| 场景 | 传统方式 | 优化后 | 成本降低 |
-|------|---------|--------|---------|
-| 短对话(10轮) | 100%全量计算 | 90% KV Cache复用 | 60% |
-| 长对话(100轮) | 100%全量计算 | 70% KV Cache复用 | 80% |
-
-**验收标准**:
-- ✅ SystemMessage在会话期间固定不变
-- ✅ 时间戳精度为分钟级(HH:MM UTC)
-- ✅ 动态提醒追加到最后一条HumanMessage
-- ✅ 多轮对话中KV Cache复用率≥70%
-
-**实现参考**:`generalAgent/graph/nodes/planner.py:86-107`
+**Token估算**: 500-1500 tokens/技能
 
 ---
 
-### 非功能需求
+### 3.2 内置参考技能SKILL.md清单
 
-#### 性能需求
+**FR-PROMPT-017**: pdf技能 (~1200 tokens)
+- 位置: `skills/pdf/SKILL.md`
+- 用途: PDF处理(表单填写、内容提取、合并拆分)
 
-| 指标 | 目标值 | 测量方法 |
-|------|--------|---------|
-| Token追踪开销 | <10ms | extract_token_usage()耗时 |
-| 压缩耗时 | <10s | LLM压缩时间 |
-| 会话恢复 | <500ms | SQLite加载时间 |
-| KV Cache复用率 | ≥70% | 多轮对话测试 |
+**FR-PROMPT-018**: docx技能 (~1000 tokens)
+- 位置: `skills/docx/SKILL.md`
+- 用途: Word文档处理(内容提取、样式修改、表格操作)
 
-#### 可靠性需求
+**FR-PROMPT-019**: xlsx技能 (~1100 tokens)
+- 位置: `skills/xlsx/SKILL.md`
+- 用途: Excel表格处理(数据读写、公式计算、图表生成)
 
-| 需求 | 说明 | 验收标准 |
-|------|------|----------|
-| 压缩降级策略 | LLM压缩失败时回退截断 | 异常注入测试 |
-| 会话持久化 | SQLite写入失败时继续运行 | 容错测试 |
-| Token计数准确性 | cumulative_prompt_tokens误差<5% | 对比API返回值 |
+**FR-PROMPT-020**: pptx技能 (~900 tokens)
+- 位置: `skills/pptx/SKILL.md`
+- 用途: PowerPoint处理(内容提取、幻灯片生成)
 
-#### 可用性需求
+**FR-PROMPT-021**: artifacts技能 (~800 tokens)
+- 位置: `skills/artifacts/SKILL.md`
+- 用途: 生成可交互内容(HTML/SVG/Mermaid/React)
 
-| 需求 | 说明 | 验收标准 |
-|------|------|----------|
-| 压缩无感知 | 不显示压缩通知 | 用户体验测试 |
-| 会话列表清晰 | 显示ID、时间、消息数 | UI评审 |
-| 配置易读性 | .env注释完整 | 开发者5分钟上手 |
-
----
-
-### 参考代码位置
-
-| 功能模块 | 代码路径 |
-|---------|---------|
-| 上下文管理器 | `generalAgent/context/manager.py` |
-| Token追踪器 | `generalAgent/context/token_tracker.py` |
-| 上下文压缩器 | `generalAgent/context/compressor.py` |
-| 消息截断器 | `generalAgent/context/truncator.py` |
-| 消息清理工具 | `generalAgent/graph/message_utils.py` |
-| Summarization节点 | `generalAgent/graph/nodes/summarization.py` |
-| 会话存储 | `shared/session/store.py` |
-| 会话管理器 | `shared/session/manager.py` |
-| 配置参数 | `generalAgent/config/settings.py:ContextManagementSettings` |
+**FR-PROMPT-022**: skill-creator技能 (~700 tokens)
+- 位置: `skills/skill-creator/SKILL.md`
+- 用途: 辅助创建新技能包
 
 ---
 
+## 4. 动态提醒
 
-# Workflow 模板 (计划中)
+动态提醒在运行时生成,追加到最后一条 HumanMessage 末尾,实现KV Cache友好。
+
+### 4.1 TODO列表提醒
+
+**触发条件**: 存在未完成的TODO项
+
+**格式**:
+```xml
+<system_reminder>
+Your todo list has changed. Here are the latest contents:
+
+[1. [completed] Read requirements
+2. [in_progress] Write code
+3. [pending] Run tests]
+
+Continue with the current task if applicable.
+</system_reminder>
+```
+
+**Token估算**: 50-200 tokens
+
+**生成位置**: `generalAgent/graph/prompts.py:build_dynamic_reminders()`
+
+---
+
+### 4.2 @mention加载提醒
+
+**触发条件**: 用户使用@mention加载工具或技能
+
+**格式** (工具):
+```xml
+<system_reminder>
+Tool '@fetch_web' has been loaded and is now available for use.
+</system_reminder>
+```
+
+**格式** (技能):
+```xml
+<system_reminder>
+Skill '@pdf' has been linked to workspace.
+
+Please read the skill documentation:
+- read_file("skills/pdf/SKILL.md")
+
+Then follow the instructions to complete the task.
+Available tool: run_bash_command (for executing scripts)
+</system_reminder>
+```
+
+**Token估算**: 30-100 tokens/提醒
+
+**生成位置**: `generalAgent/cli.py:process_mentions()`
+
+---
+
+### 4.3 文件上传提醒
+
+**触发条件**: 用户上传文件(通过#filename语法)
+
+**格式**:
+```xml
+<system_reminder>
+File uploaded: report.pdf
+- Location: uploads/report.pdf
+- Format: PDF
+- Size: 2.5 MB
+
+Suggested actions:
+- read_file("uploads/report.pdf") for preview
+- search_file("uploads/report.pdf", "keyword") for content search
+- @pdf for PDF-specific operations
+</system_reminder>
+```
+
+**Token估算**: 50-150 tokens/文件
+
+**生成位置**: `generalAgent/cli.py:process_file_uploads()`
+
+---
+
+## 5. HITL交互界面
+
+### 5.1 ask_human提问界面
+
+**用途**: Agent主动向用户提问
+
+**格式**:
+```
+💬 {question}
+
+{context (如果提供)}
+
+(默认: {default}) >
+```
+
+**示例**:
+```
+💬 您希望报告以什么格式输出?
+
+支持的格式: PDF, Markdown, HTML
+
+(默认: markdown) > PDF
+```
+
+**Token估算**: 提问内容的token数 + ~20 tokens (格式化)
+
+**生成位置**: `generalAgent/cli.py:handle_ask_human()`
+
+---
+
+### 5.2 工具审批界面
+
+**用途**: 危险工具需要用户审批
+
+**格式**:
+```
+🛡️  工具审批: {tool_name}
+
+原因: {reason}
+风险级别: {risk_level}
+
+参数:
+  {arg1}: {value1}
+  {arg2}: {value2}
+
+批准执行? [y/n] >
+```
+
+**示例**:
+```
+🛡️  工具审批: run_bash_command
+
+原因: 检测到危险命令(递归删除)
+风险级别: high
+
+参数:
+  command: rm -rf outputs/old/
+  timeout: 30
+
+批准执行? [y/n] > n
+
+❌ 已拒绝执行
+```
+
+**Token估算**: 参数内容的token数 + ~50 tokens (格式化)
+
+**生成位置**: `generalAgent/cli.py:handle_approval_request()`
+
+---
+
+## 参考代码位置
+
+| Prompt类型 | 主要文件路径 |
+|------------|-------------|
+| **Agent系统提示** | `generalAgent/graph/prompts.py` |
+| **工具描述** | `generalAgent/tools/builtin/*.py`, `generalAgent/tools/custom/*.py` |
+| **技能文档** | `skills/*/SKILL.md` |
+| **动态提醒构建** | `generalAgent/graph/prompts.py:build_dynamic_reminders()` |
+| **TODO提醒** | `generalAgent/graph/prompts.py:181-195` |
+| **@mention提醒** | `generalAgent/cli.py:process_mentions()` |
+| **文件上传提醒** | `generalAgent/cli.py:process_file_uploads()` |
+| **ask_human界面** | `generalAgent/cli.py:handle_ask_human()` |
+| **审批界面** | `generalAgent/cli.py:handle_approval_request()` |
+
+---
+
+# 15. 快速开始
+
+## 5分钟上手
+
+**1. 安装依赖**
+```bash
+# Python 3.12+
+uv sync
+# 或: pip install -e .
+```
+
+**2. 启动应用**
+```bash
+uv run main.py
+```
+
+**3. 第一次对话**
+```
+User> 你好,请介绍一下你的能力
+Agent> [介绍工具和技能]
+
+User> @pdf 帮我填写这个表单
+Agent> [加载PDF技能,执行任务]
+```
+
+### 开发第一个工具
+
+**创建自定义工具** (5分钟):
+```python
+# generalAgent/tools/custom/my_tool.py
+from langchain_core.tools import tool
+
+@tool
+def my_custom_tool(query: str) -> str:
+    """你的工具描述"""
+    return f"处理结果: {query}"
+```
+
+**配置工具**:
+```yaml
+# generalAgent/config/tools.yaml
+optional:
+  my_custom_tool:
+    enabled: true
+    category: "custom"
+    tags: ["custom"]
+```
+
+### 开发第一个技能
+
+**创建技能目录** (10分钟):
+```bash
+mkdir -p skills/my_skill
+cd skills/my_skill
+```
+
+**创建SKILL.md**:
+```markdown
+# My Skill
+
+## 功能
+描述技能的功能和使用方法
+
+## 使用步骤
+1. 步骤1
+2. 步骤2
+```
+
+**配置技能**:
+```yaml
+# generalAgent/config/skills.yaml
+optional:
+  my_skill:
+    enabled: true
+    description: "我的自定义技能"
+```
+
+# 16. Workflow 模板 (计划中)
 
 ## 产品定位
 
@@ -6868,7 +7437,7 @@ Workflow模板系统是AgentGraph框架的**高级编排能力**,基于现有的
 ---
 
 *本章节描述的是计划中的功能,具体实现可能根据开发进度调整*
-# generalAgent/config 配置系统总结
+# 17. generalAgent/config 配置系统总结
 
 ## 概述
 
@@ -8014,792 +8583,3 @@ workspace_dir = resolve_project_path("data/workspace")
 logs_dir = resolve_project_path("logs")
 session_db = resolve_project_path("data/sessions.db")
 ```
-
----
-
-# 13. 安全与合规
-
-## 概述
-
-AgentGraph 框架将安全和隐私保护作为核心设计原则，通过多层防护机制确保用户数据安全、防止恶意操作、保护敏感信息。框架采用**纵深防御**策略，在工具执行、文件访问、网络请求、数据存储等各个环节实施安全控制。
-
-**安全架构三大支柱**：
-1. **HITL 人机协同** - 危险操作需人工审批
-2. **工作区隔离** - 文件系统沙箱隔离
-3. **配置化安全** - 灵活的安全策略配置
-
----
-
-## 1. 威胁模型与防护策略
-
-### 1.1 识别的威胁
-
-| 威胁类型 | 描述 | 严重程度 | 防护措施 |
-|---------|------|---------|---------|
-| **命令注入** | Agent 执行恶意 Shell 命令 | Critical | HITL 审批 + 命令白名单 |
-| **文件系统破坏** | 删除/修改系统文件 | Critical | 工作区隔离 + 路径验证 |
-| **敏感信息泄露** | API Key/密码泄露到日志/网络 | Critical | 全局风险模式检测 |
-| **路径遍历** | 访问 workspace 外的文件 | High | 路径规范化 + 安全检查 |
-| **无限循环** | Agent 陷入死循环消耗资源 | High | max_loops 限制 |
-| **Prompt 注入** | 用户输入篡改 Agent 行为 | Medium | Jinja2 沙箱 + 参数化 |
-| **网络攻击** | 请求内网/恶意站点 | Medium | HITL 审批 + URL 检测 |
-| **数据泄露** | 会话数据被非授权访问 | Medium | 本地 SQLite + 文件权限 |
-
----
-
-## 2. HITL 人机协同防护
-
-### 2.1 四层审批架构
-
-**优先级**: 工具自定义检查器 > 全局风险模式 > 工具特定规则 > 内置默认规则
-
-```
-┌─────────────────────────────────────────┐
-│ Layer 1: 工具自定义检查器（代码实现）      │  最高优先级
-│ - 例: check_bash_command(args)          │  复杂逻辑
-│ - 返回: ApprovalDecision                │
-├─────────────────────────────────────────┤
-│ Layer 2: 全局风险模式（跨工具检测）       │  次高优先级
-│ - 敏感信息: password, api_key, token    │  适用所有工具
-│ - 系统文件: /etc/passwd, ~/.ssh/        │
-├─────────────────────────────────────────┤
-│ Layer 3: 工具特定规则（hitl_rules.yaml） │  中优先级
-│ - run_bash_command.patterns.high_risk  │  工具级控制
-│ - http_fetch.patterns.medium_risk      │
-├─────────────────────────────────────────┤
-│ Layer 4: 内置默认规则（兜底逻辑）         │  最低优先级
-│ - 常见危险命令: rm -rf, sudo, chmod 777 │  基础保护
-└─────────────────────────────────────────┘
-```
-
-### 2.2 全局风险模式
-
-**Critical（严重风险）** - 敏感信息泄露：
-
-```yaml
-critical:
-  patterns:
-    - "password\\s*[=:]\\s*['\"]?[\\w.-]+"        # 密码明文
-    - "api[_-]?key\\s*[=:]\\s*['\"]?[\\w-]+"      # API Key
-    - "secret\\s*[=:]\\s*['\"]?[\\w.-]+"          # Secret
-    - "token\\s*[=:]\\s*['\"]?[\\w.-]+"           # Token
-    - "private[_-]?key"                           # 私钥
-    - "BEGIN (RSA|DSA|EC) PRIVATE KEY"            # PEM 格式私钥
-  action: require_approval
-  reason: "检测到敏感信息（密码/密钥/令牌）"
-```
-
-**High（高风险）** - 系统文件和危险操作：
-
-```yaml
-high:
-  patterns:
-    - "/etc/passwd"                               # 系统用户文件
-    - "/etc/shadow"                               # 系统密码文件
-    - "~/.ssh/id_rsa"                            # SSH 私钥
-    - "~/.aws/credentials"                        # AWS 凭证
-    - "DROP\\s+(TABLE|DATABASE)"                  # SQL 删除
-    - "DELETE\\s+FROM.*WHERE\\s+1=1"             # SQL 批量删除
-  action: require_approval
-  reason: "检测到高风险操作（系统文件/数据库删除）"
-```
-
-**Medium（中等风险）** - 可疑模式：
-
-```yaml
-medium:
-  patterns:
-    - "https?://[^/]*\\d+\\.\\d+\\.\\d+\\.\\d+"  # IP 地址 URL
-    - "\\bexec\\s*\\("                            # 代码执行
-    - "\\beval\\s*\\("                            # 动态执行
-    - "\\.env$"                                   # 环境变量文件
-  action: require_approval
-  reason: "检测到可疑模式（代码执行/环境变量）"
-```
-
-### 2.3 工具特定规则
-
-**run_bash_command** 审批规则：
-
-```yaml
-run_bash_command:
-  enabled: true
-  patterns:
-    high_risk:
-      - "rm\\s+-rf"            # 强制删除
-      - "sudo"                 # 提权操作
-      - "chmod\\s+777"         # 危险权限
-      - "mkfs"                 # 格式化磁盘
-      - "dd.*if=/dev/"         # 磁盘写入
-    medium_risk:
-      - "curl"                 # 网络请求
-      - "wget"                 # 下载文件
-      - "pip\\s+install"       # 安装包
-  actions:
-    high_risk: require_approval
-    medium_risk: require_approval
-```
-
-**http_fetch** 审批规则：
-
-```yaml
-http_fetch:
-  enabled: true
-  rules:
-    - pattern: "localhost|127\\.0\\.0\\.1"       # 本地地址
-      action: require_approval
-      reason: "访问本地服务"
-    - pattern: "192\\.168\\.|10\\."              # 内网地址
-      action: require_approval
-      reason: "访问内网地址"
-```
-
-### 2.4 审批用户体验
-
-**极简版审批界面**（对 LLM 透明）：
-
-```
-🛡️  工具审批: run_bash_command
-   风险级别: high
-   原因: 检测到高风险操作
-   命令: rm -rf /tmp/cache
-   批准? [y/n] > n
-
-❌ 操作已取消
-```
-
-**关键设计**：
-- ✅ 审批决策**不进入对话历史**（LLM 无感知）
-- ✅ 用户可**批准/拒绝**操作
-- ✅ 拒绝后 Agent 自动调整策略
-- ✅ 完整的审批日志记录
-
-**配置路径**: `generalAgent/config/hitl_rules.yaml`
-
----
-
-## 3. 工作区隔离与文件安全
-
-### 3.1 工作区架构
-
-每个会话拥有独立的文件系统沙箱：
-
-```
-data/workspace/{session_id}/
-├── skills/           # 符号链接（只读）
-│   └── pdf/
-│       ├── SKILL.md
-│       └── scripts/
-├── uploads/          # 用户上传（可读写）
-├── outputs/          # Agent 生成输出（可读写）
-└── temp/             # 临时文件（可读写）
-```
-
-### 3.2 文件访问安全策略
-
-| 操作 | 允许路径 | 禁止路径 | 验证方式 |
-|------|---------|---------|---------|
-| **读取** | `workspace/**/*` | `workspace/` 外的任何路径 | `_validate_workspace_path()` |
-| **写入** | `outputs/`, `temp/`, `uploads/` | `skills/`, `workspace/` 外 | `_validate_write_path()` |
-| **执行** | `skills/*/scripts/*.py` | 其他所有路径 | `_validate_script_path()` |
-| **删除** | `outputs/`, `temp/` | `skills/`, `uploads/` | `_validate_delete_path()` |
-
-### 3.3 路径安全实现
-
-**路径规范化**（防止路径遍历）：
-
-```python
-def _validate_workspace_path(self, file_path: str) -> Path:
-    """验证路径是否在 workspace 内（防止 ../ 攻击）"""
-    # 1. 解析为绝对路径
-    abs_path = (self.workspace_path / file_path).resolve()
-
-    # 2. 检查是否在 workspace 内
-    if not abs_path.is_relative_to(self.workspace_path):
-        raise SecurityError(f"Path outside workspace: {file_path}")
-
-    # 3. 检查符号链接（防止软链接逃逸）
-    if abs_path.is_symlink():
-        real_path = abs_path.readlink()
-        if not real_path.is_relative_to(self.workspace_path):
-            raise SecurityError(f"Symlink escape detected: {file_path}")
-
-    return abs_path
-```
-
-**写入路径限制**：
-
-```python
-def _validate_write_path(self, file_path: str) -> Path:
-    """验证写入路径（只允许 outputs/、temp/、uploads/）"""
-    abs_path = self._validate_workspace_path(file_path)
-
-    # 允许的写入目录
-    allowed_dirs = ["outputs", "temp", "uploads"]
-
-    # 检查路径是否在允许的目录下
-    relative_path = abs_path.relative_to(self.workspace_path)
-    if relative_path.parts[0] not in allowed_dirs:
-        raise SecurityError(
-            f"Write not allowed: {file_path}. "
-            f"Only allowed in: {', '.join(allowed_dirs)}"
-        )
-
-    return abs_path
-```
-
-### 3.4 技能脚本执行安全
-
-**隔离执行环境**：
-
-```python
-def execute_skill_script(self, script_path: str, args: list[str]) -> str:
-    """执行技能脚本（受限环境）"""
-    # 1. 验证脚本路径（必须在 skills/*/scripts/ 下）
-    abs_script = self._validate_script_path(script_path)
-
-    # 2. 设置环境变量（隔离）
-    env = os.environ.copy()
-    env["AGENT_WORKSPACE_PATH"] = str(self.workspace_path)
-    env["PYTHONPATH"] = str(self.workspace_path)  # 限制 import
-
-    # 3. 执行脚本（超时保护）
-    result = subprocess.run(
-        ["python", abs_script, *args],
-        cwd=self.workspace_path,    # 限制工作目录
-        env=env,                     # 隔离环境变量
-        timeout=30,                  # 超时限制
-        capture_output=True,
-        text=True
-    )
-
-    return result.stdout
-```
-
----
-
-## 4. 网络安全
-
-### 4.1 HTTP 请求安全策略
-
-**fetch_web / http_fetch 工具**安全控制：
-
-| 风险类型 | 检测模式 | 防护措施 |
-|---------|---------|---------|
-| **内网扫描** | `localhost`, `127.0.0.1`, `192.168.*`, `10.*` | HITL 审批 |
-| **SSRF 攻击** | `file://`, `ftp://`, `gopher://` | 协议白名单（仅 http/https） |
-| **敏感端口** | `:22`, `:3306`, `:5432`, `:6379` | HITL 审批 |
-| **超长 URL** | URL 长度 > 2048 | 拒绝请求 |
-
-**实现示例**：
-
-```python
-def _validate_url(self, url: str) -> None:
-    """验证 URL 安全性"""
-    # 1. 协议白名单
-    if not url.startswith(("http://", "https://")):
-        raise SecurityError(f"Invalid protocol: {url}")
-
-    # 2. 解析 URL
-    parsed = urllib.parse.urlparse(url)
-
-    # 3. 检测内网地址
-    ip_pattern = r"\d+\.\d+\.\d+\.\d+"
-    if re.match(ip_pattern, parsed.hostname or ""):
-        ip = ipaddress.ip_address(parsed.hostname)
-        if ip.is_private or ip.is_loopback:
-            raise SecurityError(f"Private IP detected: {url}")
-
-    # 4. 检测 localhost
-    if parsed.hostname in ("localhost", "127.0.0.1", "::1"):
-        raise SecurityError(f"Localhost access denied: {url}")
-
-    # 5. 长度限制
-    if len(url) > 2048:
-        raise SecurityError(f"URL too long: {len(url)} chars")
-```
-
-### 4.2 DNS Rebinding 防护
-
-**问题**：攻击者通过 DNS 将域名先解析到公网 IP（通过验证），再解析到内网 IP（绕过防护）
-
-**防护**：
-
-```python
-def fetch_with_dns_rebinding_protection(self, url: str) -> str:
-    """防 DNS Rebinding 的网络请求"""
-    # 1. 首次 DNS 解析
-    hostname = urllib.parse.urlparse(url).hostname
-    first_ip = socket.gethostbyname(hostname)
-
-    # 2. 验证第一次解析的 IP
-    if ipaddress.ip_address(first_ip).is_private:
-        raise SecurityError(f"Private IP detected: {first_ip}")
-
-    # 3. 发起请求前再次解析
-    second_ip = socket.gethostbyname(hostname)
-
-    # 4. 验证 IP 一致性
-    if first_ip != second_ip:
-        raise SecurityError(f"DNS rebinding detected: {first_ip} -> {second_ip}")
-
-    # 5. 发起请求
-    return requests.get(url, timeout=10).text
-```
-
----
-
-## 5. 数据隐私保护
-
-### 5.1 本地优先原则
-
-**数据存储策略**：
-
-| 数据类型 | 存储位置 | 加密 | 访问控制 |
-|---------|---------|------|---------|
-| **会话历史** | `data/sessions.db` (SQLite) | ❌ 明文 | 文件系统权限 |
-| **工作区文件** | `data/workspace/{session_id}/` | ❌ 明文 | 目录权限 + 路径隔离 |
-| **日志文件** | `logs/` | ❌ 明文 | 文件系统权限 |
-| **配置文件** | `.env`, `*.yaml` | ❌ 明文 | 文件系统权限 |
-| **API Keys** | `.env` (环境变量) | ❌ 明文 | 文件系统权限 + `.gitignore` |
-
-**关键原则**：
-- ✅ **本地存储** - 所有数据保存在本地，不上传云端
-- ✅ **文件权限** - 依赖操作系统文件权限（`chmod 600`）
-- ✅ **`.gitignore`** - 敏感文件（`.env`, `data/`, `logs/`）排除版本控制
-- ⚠️ **无加密** - 当前版本不提供静态数据加密（未来可选）
-
-### 5.2 日志脱敏
-
-**敏感信息过滤**：
-
-```python
-def sanitize_log_message(self, message: str) -> str:
-    """日志脱敏（移除敏感信息）"""
-    # 1. API Key 脱敏
-    message = re.sub(
-        r"(api[_-]?key['\"]?\s*[:=]\s*['\"]?)[\w-]+",
-        r"\1***REDACTED***",
-        message,
-        flags=re.IGNORECASE
-    )
-
-    # 2. Token 脱敏
-    message = re.sub(
-        r"(token['\"]?\s*[:=]\s*['\"]?)[\w.-]+",
-        r"\1***REDACTED***",
-        message,
-        flags=re.IGNORECASE
-    )
-
-    # 3. Password 脱敏
-    message = re.sub(
-        r"(password['\"]?\s*[:=]\s*['\"]?)[\w.-]+",
-        r"\1***REDACTED***",
-        message,
-        flags=re.IGNORECASE
-    )
-
-    return message
-```
-
-### 5.3 LLM 调用隐私
-
-**Prompt Token 限制**（防止敏感信息泄露）：
-
-```python
-# generalAgent/config/settings.py
-class ObservabilitySettings(BaseSettings):
-    log_prompt_max_length: int = Field(default=500)  # 日志中 Prompt 最大长度
-```
-
-**LangSmith 追踪**（可选，默认关闭）：
-
-```bash
-# .env
-LANGCHAIN_TRACING_V2=false  # 默认关闭（防止敏感数据上传）
-LANGSMITH_API_KEY=          # 留空
-```
-
----
-
-## 6. Prompt 安全
-
-### 6.1 Jinja2 沙箱模式
-
-**防止 Prompt 注入攻击**：
-
-```python
-from jinja2.sandbox import SandboxedEnvironment
-
-def render_template_safely(template: str, params: dict) -> str:
-    """使用沙箱环境渲染模板（防止代码执行）"""
-    # 使用 SandboxedEnvironment（禁止 import、exec、eval 等）
-    env = SandboxedEnvironment()
-
-    # 渲染模板
-    return env.from_string(template).render(**params)
-```
-
-**SandboxedEnvironment 限制**：
-- ❌ 禁止 `{% import ... %}`
-- ❌ 禁止 `{% exec ... %}`
-- ❌ 禁止访问私有属性（`__xxx__`）
-- ❌ 禁止调用危险函数（`eval`, `exec`, `compile`）
-
-### 6.2 参数化 Prompt
-
-**推荐模式**（防止注入）：
-
-```python
-# ✅ 推荐：参数化
-template = "你是 {{ role }}。任务: {{ task }}"
-prompt = render_template(template, {"role": user_input, "task": task_desc})
-
-# ❌ 不推荐：字符串拼接
-prompt = f"你是 {user_input}。任务: {task_desc}"  # 可能被注入
-```
-
----
-
-## 7. 依赖安全
-
-### 7.1 Python 依赖管理
-
-**锁定依赖版本**（`uv.lock`）：
-
-```toml
-# pyproject.toml
-[project.dependencies]
-langchain = "^0.3.15"
-langgraph = "^0.2.62"
-jinja2 = "^3.1.5"
-```
-
-**安全扫描**（推荐工具）：
-
-```bash
-# 1. pip-audit - 扫描已知漏洞
-pip-audit
-
-# 2. safety - 检查不安全的依赖
-safety check
-
-# 3. bandit - 静态代码分析
-bandit -r generalAgent/
-```
-
-### 7.2 技能依赖隔离
-
-**自动依赖安装**（`skills/*/requirements.txt`）：
-
-```python
-def install_skill_dependencies(self, skill_id: str) -> None:
-    """安装技能依赖（隔离安装）"""
-    requirements_file = self.skills_path / skill_id / "requirements.txt"
-
-    if requirements_file.exists():
-        # 使用虚拟环境隔离（可选）
-        subprocess.run([
-            "pip", "install", "-r", str(requirements_file),
-            "--user",  # 用户级安装（非全局）
-        ], check=True)
-```
-
----
-
-## 8. 运行时安全
-
-### 8.1 循环控制
-
-**防止无限循环**：
-
-```bash
-# .env
-MAX_LOOPS=500  # Agent Loop 最大迭代次数（1-500）
-```
-
-```python
-# generalAgent/graph/routing.py
-def agent_route(state: AppState) -> Literal["tools", "finalize"]:
-    """路由决策（带循环保护）"""
-    # 检查循环次数
-    if state["loops"] >= state.get("max_loops", 500):
-        logger.warning(f"Max loops reached: {state['loops']}")
-        return "finalize"  # 强制结束
-
-    # 正常路由逻辑
-    ...
-```
-
-### 8.2 超时保护
-
-**工具执行超时**：
-
-```python
-# run_bash_command 工具
-result = subprocess.run(
-    command,
-    timeout=30,  # 30 秒超时
-    capture_output=True,
-    text=True
-)
-```
-
-**HTTP 请求超时**：
-
-```python
-# fetch_web 工具
-response = requests.get(url, timeout=10)  # 10 秒超时
-```
-
-### 8.3 资源限制
-
-**内存限制**（消息历史）：
-
-```bash
-# .env
-MAX_MESSAGE_HISTORY=500  # 最多保留 500 条消息
-```
-
-**工作区清理**：
-
-```bash
-# CLI 命令
-/clean  # 清理 7 天前的旧工作区
-```
-
----
-
-## 9. 安全配置最佳实践
-
-### 9.1 生产环境配置
-
-```bash
-# .env (生产环境)
-
-# ========== 安全配置 ==========
-# 关闭自动审批（强制 HITL）
-AUTO_APPROVE_WRITES=false
-
-# 限制循环次数
-MAX_LOOPS=100
-
-# 关闭 LangSmith 追踪（防止数据泄露）
-LANGCHAIN_TRACING_V2=false
-
-# 限制上下文长度（防止 token 泄露）
-CONTEXT_MAX_HISTORY_MESSAGES=100
-```
-
-```yaml
-# hitl_rules.yaml (生产环境)
-global:
-  enabled: true                    # 启用审批
-  default_action: ask              # 默认需审批（更严格）
-
-  risk_patterns:
-    critical:
-      patterns:
-        - "password"
-        - "api_key"
-        - "secret"
-        - "token"
-      action: require_approval
-```
-
-### 9.2 开发环境配置
-
-```bash
-# .env (开发环境)
-
-# ========== 开发配置 ==========
-# 可选开启自动审批（提高开发效率）
-AUTO_APPROVE_WRITES=true  # ⚠️ 仅开发环境
-
-# 启用 LangSmith 追踪（调试用）
-LANGCHAIN_TRACING_V2=true
-LANGSMITH_API_KEY=lsv2_xxx
-```
-
-```yaml
-# hitl_rules.yaml (开发环境)
-global:
-  enabled: false  # ⚠️ 仅开发环境，禁用审批加速测试
-```
-
-### 9.3 安全检查清单
-
-**部署前检查**：
-
-- [ ] `.env` 文件已添加到 `.gitignore`
-- [ ] `AUTO_APPROVE_WRITES=false`（生产环境）
-- [ ] `LANGCHAIN_TRACING_V2=false`（生产环境）
-- [ ] `hitl_rules.yaml` 启用全局风险模式
-- [ ] `data/` 和 `logs/` 目录已排除版本控制
-- [ ] 文件系统权限正确（`chmod 600 .env`）
-- [ ] 依赖版本锁定（`uv.lock` 已提交）
-- [ ] 运行 `pip-audit` 检查漏洞
-- [ ] 运行 `bandit` 静态分析
-- [ ] 工作区清理任务已配置
-
----
-
-## 10. 安全事件响应
-
-### 10.1 审批日志
-
-**审批事件记录**：
-
-```python
-# generalAgent/hitl/approval_node.py
-logger.warning(
-    f"HITL Approval Required: tool={tool_name}, "
-    f"risk={decision.risk_level}, reason={decision.reason}"
-)
-```
-
-**日志格式**：
-
-```
-2025-10-31 22:00:00 WARNING HITL Approval Required:
-  tool=run_bash_command,
-  risk=high,
-  reason=检测到高风险操作
-  args={'command': 'rm -rf /tmp/cache'}
-  user_decision=rejected
-```
-
-### 10.2 安全事件分类
-
-| 级别 | 事件类型 | 示例 | 响应措施 |
-|------|---------|------|---------|
-| **Critical** | 敏感信息泄露 | API Key 出现在日志 | 立即轮换密钥 + 审查日志 |
-| **High** | 系统文件访问 | 尝试读取 `/etc/passwd` | HITL 拦截 + 记录事件 |
-| **Medium** | 内网请求 | 访问 `192.168.1.1` | HITL 审批 + 用户决策 |
-| **Low** | 循环超限 | `loops >= max_loops` | 自动结束 + 日志记录 |
-
-### 10.3 事件溯源
-
-**审计日志查询**：
-
-```bash
-# 查找所有审批事件
-grep "HITL Approval" logs/*.log
-
-# 查找被拒绝的操作
-grep "user_decision=rejected" logs/*.log
-
-# 查找敏感信息检测
-grep "敏感信息" logs/*.log
-```
-
----
-
-## 11. 已知限制与未来改进
-
-### 11.1 当前限制
-
-| 限制 | 影响 | 缓解措施 |
-|------|------|---------|
-| **无静态数据加密** | 本地文件可被直接读取 | 依赖文件系统权限 |
-| **无网络加密** | LLM API 调用依赖 HTTPS | 使用官方 SDK（自动 TLS） |
-| **无身份认证** | 单用户使用 | 多用户需外部鉴权 |
-| **无访问控制** | 所有会话可见 | 依赖操作系统用户隔离 |
-| **日志明文** | 敏感信息可能泄露 | 日志脱敏 + 定期清理 |
-
-### 11.2 未来改进方向
-
-**短期（v4.0）**：
-- [ ] 日志敏感信息自动脱敏
-- [ ] 工作区文件自动加密（可选）
-- [ ] 审批事件导出（JSON/CSV）
-
-**中期（v4.5）**：
-- [ ] 基于角色的访问控制（RBAC）
-- [ ] 多租户会话隔离
-- [ ] 审计日志可视化 Dashboard
-
-**长期（v5.0）**：
-- [ ] 端到端加密（E2EE）
-- [ ] 零知识证明（ZKP）Prompt 保护
-- [ ] 联邦学习（Federated Learning）支持
-
----
-
-## 12. 安全合规
-
-### 12.1 数据保护法规
-
-**GDPR（欧盟）合规性**：
-
-| 要求 | 框架支持 | 说明 |
-|------|---------|------|
-| **数据最小化** | ✅ | 本地存储，不上传云端 |
-| **访问权利** | ✅ | 用户可直接访问 `data/` 目录 |
-| **删除权利** | ✅ | `/reset` 命令删除会话 |
-| **数据便携性** | ✅ | SQLite 数据库可导出 |
-| **加密要求** | ⚠️ | 当前无静态加密（可选） |
-
-**CCPA（加州）合规性**：
-
-| 要求 | 框架支持 | 说明 |
-|------|---------|------|
-| **知情权** | ✅ | 本地存储，用户完全可见 |
-| **删除权** | ✅ | `/reset` 或删除 `data/` |
-| **选择退出** | ✅ | 不收集遥测数据 |
-
-### 12.2 企业安全标准
-
-**SOC 2 Type II** 考虑：
-
-- ✅ **访问控制**: 文件系统权限
-- ✅ **审计日志**: 完整的审批和操作日志
-- ✅ **数据隔离**: 工作区隔离机制
-- ⚠️ **加密**: 当前无静态数据加密
-- ⚠️ **身份验证**: 依赖外部系统
-
----
-
-## 13. 安全联系方式
-
-**安全漏洞报告**：
-- 邮箱: `security@example.com`（请替换为实际邮箱）
-- GitHub: [Security Advisory](https://github.com/your-org/agentsgraph/security/advisories)
-
-**负责任的披露政策**：
-1. 发现漏洞后，请私下报告（不公开披露）
-2. 我们将在 **7 个工作日**内响应
-3. 修复后，我们将在 **90 天内**发布补丁
-4. 公开披露时会致谢安全研究人员
-
----
-
-## 14. 总结
-
-AgentGraph 框架通过多层防护机制实现安全和隐私保护：
-
-**安全三大支柱**：
-1. **HITL 人机协同** - 四层审批规则拦截危险操作
-2. **工作区隔离** - 文件系统沙箱防止路径遍历
-3. **配置化安全** - 灵活的安全策略适配不同环境
-
-**隐私保护原则**：
-- ✅ **本地优先** - 所有数据保存本地
-- ✅ **最小化** - 仅收集必要信息
-- ✅ **透明** - 用户可直接访问数据
-- ✅ **可控** - 用户可删除所有数据
-
-**安全最佳实践**：
-- 生产环境关闭 `AUTO_APPROVE_WRITES`
-- 启用 HITL 全局风险模式
-- 定期运行安全扫描（`pip-audit`, `bandit`）
-- 审查审批日志，发现异常行为
-
-**持续改进**：
-框架安全特性将持续演进，欢迎社区贡献和安全研究人员的反馈。
-
----
-
-**文档版本**: v3.6
-**最后更新**: 2025-10-31
