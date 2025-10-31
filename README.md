@@ -338,6 +338,40 @@ Comprehensive documentation is organized into six core documents by topic and au
 
 ## Recent Updates
 
+### 2025-10-31
+
+**Product Requirements Document (PRD) - P2 Extension** ⭐ **LATEST**
+- Extended PRD to 5,866 lines (v3.2, +22% from v3.0)
+- **P2 Chapters (2/3)**:
+  - ✅ Product Overview (410 lines) - Framework positioning, competitive analysis, quick start guide
+  - ✅ Architecture Optimization (663 lines) - 8 optimization strategies with quantified metrics ⭐ NEW
+    - KV Cache optimization: 70-90% token reuse, 60-80% cost reduction
+    - Context auto-compression: 95% compression ratio (302 messages → 13)
+    - Document indexing: First search 3s, subsequent <100ms
+    - 5 troubleshooting guides with executable commands
+- **Updated Statistics**:
+  - Total: 43+ functional requirements
+  - Code references: 70+ precise file paths
+  - Optimization strategies: 8 production-proven techniques
+
+**PRD Evolution** (2025-10-31):
+- v3.0 (4,789 lines): P0+P1 complete
+- v3.1 (5,203 lines): Added Product Overview (+410 lines)
+- v3.2 (5,866 lines): Added Architecture Optimization (+663 lines) ⭐ CURRENT
+
+**PRD Completion** (Earlier 2025-10-31)
+- Completed comprehensive PRD: `docs/桌面 AI 框架需求.md`
+- **P0 Core Chapters (6/6)**: Tool System, Skill System, Agent Templates, Agent Flow & State, HITL, Context Management
+- **P1 Important Chapters (5/5)**: Model Routing, Multi-Agent Collaboration, Workspace Management, File Processing, Session Management
+- Complete maintenance guide, terminology glossary, and version history
+
+**Key PRD Features**:
+- Unified chapter structure (Product Positioning → Scenarios → Requirements → NFR → Code References)
+- Cross-references between chapters ("See Chapter X")
+- Version tracking (v1.0 → v2.0 → v3.0 → v3.2)
+- Quality checklist and documentation maintenance guide
+- Production-grade optimization strategies with quantified ROI
+
 ### 2025-10-27
 
 **Documentation Reorganization** ⭐
