@@ -1,0 +1,83 @@
+# OrchestrationAgent Tools Configuration
+#
+# Host Agent is STRICTLY RESTRICTED to orchestration tools only.
+# All "labor" tools (file ops, network, bash) are FORBIDDEN.
+
+global:
+  enabled: true
+  auto_load_on_demand: false  # Host has fixed toolset, no dynamic loading
+
+# ========== Core Tools (Always Available) ==========
+core:
+  # === Delegation Tool (MOST IMPORTANT) ===
+  delegate_task:
+    category: "orchestration"
+    tags: ["orchestration", "delegation"]
+    description: "委派独立子任务给 Worker Agent 执行"
+    available_to_subagent: false  # Host-only tool, workers cannot re-delegate
+
+  # === Control Flow Tool ===
+  done_and_report:
+    category: "orchestration"
+    tags: ["orchestration", "control"]
+    description: "向用户汇报最终结果并结束任务（信号工具）"
+    available_to_subagent: false  # Host-only tool
+
+  # === Progress Management ===
+  todo_write:
+    category: "meta"
+    tags: ["meta", "progress"]
+    description: "记录和更新高层项目计划（子任务列表）"
+    available_to_subagent: false
+
+  # === User Interaction ===
+  ask_human:
+    category: "meta"
+    tags: ["meta", "interaction"]
+    description: "向用户提问以澄清模糊需求"
+    available_to_subagent: true  # Workers may also need to ask questions
+
+  # === Utility ===
+  now:
+    category: "meta"
+    tags: ["meta", "time"]
+    description: "获取当前 UTC 时间（用于时间戳和汇报）"
+    available_to_subagent: true
+
+# ========== Optional Tools (ALL DISABLED for Host) ==========
+# Host CANNOT use these tools. Workers will have access to them.
+optional:
+  # File Operations
+  read_file:
+    enabled: false
+    category: "read"
+  write_file:
+    enabled: false
+    category: "write"
+  list_workspace_files:
+    enabled: false
+    category: "read"
+  find_files:
+    enabled: false
+    category: "read"
+  search_file:
+    enabled: false
+    category: "read"
+
+  # Network Operations
+  http_fetch:
+    enabled: false
+    category: "network"
+  search_web:
+    enabled: false
+    category: "network"
+
+  # Execution
+  run_bash_command:
+    enabled: false
+    category: "compute"
+
+  # Other Tools
+  compact_context:
+    enabled: false
+    category: "meta"

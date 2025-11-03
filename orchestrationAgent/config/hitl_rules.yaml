@@ -1,0 +1,88 @@
+# HITL (Human-in-the-Loop) Rules for OrchestrationAgent
+#
+# Orchestration-specific approval rules.
+# Host doesn't execute dangerous operations directly, but can DELEGATE them.
+# We need to intercept risky delegations.
+
+global:
+  # Global risk patterns (cross-tool detection)
+  risk_patterns:
+    critical:
+      patterns:
+        # Sensitive information leakage
+        - "password\\s*[=:]\\s*['\"]?\\w+"
+        - "api[_-]?key\\s*[=:]\\s*"
+        - "secret\\s*[=:]\\s*"
+        - "token\\s*[=:]\\s*"
+      action: require_approval
+      reason: "检测到敏感信息（密码/密钥/令牌）"
+
+    high:
+      patterns:
+        # System file access
+        - "/etc/passwd"
+        - "/etc/shadow"
+        - "~/.ssh"
+        # Destructive operations
+        - "DROP\\s+(TABLE|DATABASE)"
+        - "DELETE\\s+FROM"
+      action: require_approval
+      reason: "检测到高风险操作（系统文件访问或数据删除）"
+
+# ========== Tool-Specific Rules ==========
+tools:
+  # === Delegation Tool Approval (CRITICAL) ===
+  delegate_task:
+    enabled: true
+    patterns:
+      critical_risk:
+        # Destructive file operations
+        - "rm\\s+-rf"
+        - "删除.*目录"
+        - "删除.*文件夹"
+        - "清空"
+        # System modifications
+        - "sudo"
+        - "chmod\\s+777"
+        - "格式化"
+        # Mass operations
+        - "批量删除"
+        - "全部删除"
+      high_risk:
+        # Network operations
+        - "curl.*http"
+        - "wget"
+        - "下载.*http"
+        # Installation
+        - "pip\\s+install"
+        - "npm\\s+install"
+        - "安装"
+        # Sensitive file access
+        - "config.*password"
+        - "credentials"
+        - "\\.env"
+      medium_risk:
+        # File modifications
+        - "修改.*配置"
+        - "写入.*系统"
+    actions:
+      critical_risk: require_approval
+      high_risk: require_approval
+      medium_risk: log_only  # Just log, don't block
+
+  # === Other Tools (Minimal Risk) ===
+  ask_human:
+    enabled: true
+    # No approval needed - safe operation
+
+  todo_write:
+    enabled: true
+    # No approval needed - metadata only
+
+  done_and_report:
+    enabled: true
+    # No approval needed - read-only signal
+
+  now:
+    enabled: true
+    # No approval needed - read-only utility
