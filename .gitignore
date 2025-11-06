@@ -42,3 +42,6 @@ htmlcov/
 *.tmp
 *.swp
 *~
+
+# Environment
+.env
