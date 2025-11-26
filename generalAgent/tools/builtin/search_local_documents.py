@@ -20,26 +20,21 @@ DEFAULT_DB_PATH = r"C:\ProgramData\360safe\FastFind\documents.db"
 
 @tool
 def search_local_documents(
-    query: Annotated[str, "Search keywords (supports FTS5 syntax: AND, OR, NOT, phrases)"],
+    query: Annotated[str, "Search keywords to find in filename or content"],
     file_types: Annotated[Optional[List[str]], "Filter by file extensions, e.g. ['pdf', 'docx', 'txt']"] = None,
     days: Annotated[Optional[int], "Only search files modified within last N days"] = None,
     limit: Annotated[int, "Maximum number of results to return"] = 8,
 ) -> str:
     """Search local documents using Windows document database.
 
-    This tool searches the local document index database (360 FastFind) using FTS5 full-text search.
-
-    Query Syntax (FTS5):
-    - Simple: "报告" (matches documents containing 报告)
-    - Phrase: '"年度报告"' (exact phrase match)
-    - Boolean: "预算 AND 2024", "销售 OR 营销", "报告 NOT 草稿"
-    - Prefix: "财务*" (matches 财务报表, 财务分析, etc.)
+    This tool searches the local document index database (360 FastFind).
+    Searches both filename and file content using keyword matching.
 
     Examples:
         search_local_documents("项目方案")
         search_local_documents("合同", file_types=["pdf", "docx"])
         search_local_documents("会议纪要", days=30)
-        search_local_documents("预算 AND 2024", file_types=["xlsx"], limit=5)
+        search_local_documents("预算", file_types=["xlsx"], limit=5)
     """
     try:
         db_path = Path(DEFAULT_DB_PATH)
@@ -51,26 +46,24 @@ def search_local_documents(
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # Build query using FTS5 search
-        # documents_search is the FTS5 virtual table
+        # Build query using LIKE search on documents table
+        # (FTS5 requires custom tokenizer not available in standard Python sqlite3)
         params = []
 
-        # Base FTS5 query with snippet
-        # snippet(table, column_index, before, after, ellipsis, max_tokens)
-        # filecontent is column index 8 in the FTS table
+        # Base query with LIKE search on filename and filecontent
         base_sql = """
             SELECT
-                d.filename,
-                d.filename as filepath,
-                snippet(documents_search, 8, '<b>', '</b>', '...', 32) as snippet,
-                d.modifytime,
-                d.filesize,
-                d.filetype
-            FROM documents_search
-            JOIN documents d ON documents_search.rowid = d.rowid
-            WHERE documents_search MATCH ?
+                filename,
+                filename as filepath,
+                filecontent,
+                modifytime,
+                filesize,
+                filetype
+            FROM documents
+            WHERE (filename LIKE ? OR filecontent LIKE ?)
         """
-        params.append(query)
+        like_pattern = f"%{query}%"
+        params.extend([like_pattern, like_pattern])
 
         # Add file type filter
         if file_types:
@@ -152,10 +145,13 @@ def _format_results(query: str, rows: list, file_types: Optional[List[str]], day
     for i, row in enumerate(rows, 1):
         filename = row["filename"] or "Unknown"
         filepath = row["filepath"] or ""
-        snippet = row["snippet"] or ""
+        filecontent = row["filecontent"] or ""
         modifytime = row["modifytime"] or ""
         filesize = row["filesize"] or 0
         filetype = row["filetype"] or ""
+
+        # Generate snippet from filecontent
+        snippet = _extract_snippet(filecontent, query) if filecontent else ""
 
         # Format file size
         size_str = _format_size(filesize) if filesize else ""
@@ -174,9 +170,7 @@ def _format_results(query: str, rows: list, file_types: Optional[List[str]], day
         lines.append(f"{i}. 📄 {filename}")
         lines.append(f"   路径: {filepath}")
         if snippet:
-            # Clean up snippet (remove extra whitespace)
-            clean_snippet = " ".join(snippet.split())
-            lines.append(f"   片段: {clean_snippet}")
+            lines.append(f"   片段: {snippet}")
         if date_str or size_str:
             meta_parts = []
             if date_str:
@@ -187,6 +181,47 @@ def _format_results(query: str, rows: list, file_types: Optional[List[str]], day
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _extract_snippet(content: str, query: str, context_chars: int = 60) -> str:
+    """Extract snippet around the query match with context."""
+    if not content or not query:
+        return ""
+
+    # Find query position (case-insensitive)
+    content_lower = content.lower()
+    query_lower = query.lower()
+    pos = content_lower.find(query_lower)
+
+    if pos == -1:
+        # Query not found in content (matched filename), return beginning
+        preview = " ".join(content[:150].split())
+        return preview + "..." if len(content) > 150 else preview
+
+    # Extract context around match
+    start = max(0, pos - context_chars)
+    end = min(len(content), pos + len(query) + context_chars)
+
+    snippet = content[start:end]
+
+    # Clean up whitespace
+    snippet = " ".join(snippet.split())
+
+    # Add ellipsis
+    if start > 0:
+        snippet = "..." + snippet
+    if end < len(content):
+        snippet = snippet + "..."
+
+    # Highlight match with **
+    try:
+        import re
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        snippet = pattern.sub(lambda m: f"**{m.group()}**", snippet)
+    except:
+        pass
+
+    return snippet
 
 
 def _format_size(size_bytes: int) -> str:
