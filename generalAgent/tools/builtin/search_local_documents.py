@@ -80,8 +80,8 @@ def search_local_documents(
             base_sql += " AND d.modifytime >= ?"
             params.append(cutoff_timestamp)
 
-        # Add limit
-        base_sql += " ORDER BY rank LIMIT ?"
+        # Add order and limit (newest first)
+        base_sql += " ORDER BY modifytime DESC LIMIT ?"
         params.append(limit)
 
         cursor.execute(base_sql, params)
