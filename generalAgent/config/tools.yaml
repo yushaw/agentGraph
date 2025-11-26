@@ -130,6 +130,13 @@ optional:
     tags: ["network", "agent"]
     description: "Call external agents"
 
+  search_local_documents:
+    enabled: false
+    available_to_subagent: false
+    category: "search"
+    tags: ["search", "local", "documents", "windows"]
+    description: "Search local Windows document database (360 FastFind FTS5 index)"
+
 
 
 # Tool directories
