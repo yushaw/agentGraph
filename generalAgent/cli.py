@@ -550,6 +550,9 @@ class GeneralAgentCLI(BaseCLI):
             if tool_id:
                 self.printed_tool_ids.add(tool_id)
             if text:
+                # Truncate tool result to 200 characters
+                if len(text) > 200:
+                    text = text[:200] + "..."
                 print(f"<< [result] {text}")
 
         # Mark message as printed
