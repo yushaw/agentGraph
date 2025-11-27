@@ -247,6 +247,18 @@ START → agent ⇄ tools → agent → finalize → END
   - `@agent` - Load delegate_task tool
 - Mentions parsed in main.py and classified in planner.py
 
+**File Upload System** (generalAgent/utils/file_upload_parser.py)
+- Use `#` prefix to reference files from `uploads/` directory
+- Supported patterns:
+  - `#filename.ext` - Single file
+  - `#dir/file.ext` - File in subdirectory
+  - `#dir/` - All files in directory (non-recursive)
+  - `#dir/**` - All files recursively
+  - `#dir/*.pdf` - Glob pattern
+  - `#*.md` - Root directory glob
+- Example: `分析 #demo_requirement/ 目录下的所有文档` expands to all files in that directory
+- Files are copied to session workspace and injected into message content
+
 **KV Cache Optimization** ⭐ NEW (generalAgent/graph/nodes/planner.py, finalize.py)
 - **Fixed SystemMessage**: Generated once at initialization, never changes
 - **Minute-level timestamp**: `<current_datetime>YYYY-MM-DD HH:MM UTC</current_datetime>` placed at bottom of SystemMessage

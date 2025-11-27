@@ -21,6 +21,7 @@ from generalAgent.utils import (
     log_error,
     parse_mentions,
     parse_file_mentions,
+    expand_file_patterns,
     process_file,
 )
 from generalAgent.utils.mention_classifier import classify_mentions, group_by_type
@@ -163,9 +164,19 @@ class GeneralAgentCLI(BaseCLI):
 
             if workspace_path:
                 workspace_dir = Path(workspace_path)
-                self.logger.info(f"Processing {len(file_mentions)} file uploads: {file_mentions}")
 
-                for filename in file_mentions:
+                # Expand directory and glob patterns to actual file paths
+                expanded_files = expand_file_patterns(file_mentions, tmp_dir)
+
+                if expanded_files:
+                    self.logger.info(
+                        f"Expanded {len(file_mentions)} patterns to {len(expanded_files)} files: {expanded_files}"
+                    )
+                else:
+                    self.logger.warning(f"No files matched patterns: {file_mentions}")
+                    print(f"[警告: 未找到匹配的文件 {file_mentions}]")
+
+                for filename in expanded_files:
                     result = process_file(filename, tmp_dir, workspace_dir)
 
                     if result.error:
