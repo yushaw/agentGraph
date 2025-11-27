@@ -539,8 +539,19 @@ class GeneralAgentCLI(BaseCLI):
                 for tool_call in msg.tool_calls:
                     tool_name = tool_call.get("name", "unknown")
                     tool_args = tool_call.get("args", {})
-                    args_str = self._format_tool_args(tool_args)
-                    print(f">> [call] {tool_name}({args_str})")
+
+                    # Special handling for todo_write: show todo items
+                    if tool_name == "todo_write" and "todos" in tool_args:
+                        print(">> [call] todo_write")
+                        for todo in tool_args["todos"]:
+                            status = todo.get("status", "pending")
+                            content = todo.get("content", "")
+                            # Status icons
+                            icon = {"pending": "○", "in_progress": "◐", "completed": "●"}.get(status, "○")
+                            print(f"   {icon} {content}")
+                    else:
+                        args_str = self._format_tool_args(tool_args)
+                        print(f">> [call] {tool_name}({args_str})")
 
         # Handle tool result messages
         elif role == "tool":
@@ -550,9 +561,9 @@ class GeneralAgentCLI(BaseCLI):
             if tool_id:
                 self.printed_tool_ids.add(tool_id)
             if text:
-                # Truncate tool result to 200 characters
-                if len(text) > 200:
-                    text = text[:200] + "..."
+                # Truncate tool result to 100 characters
+                if len(text) > 100:
+                    text = text[:100] + "..."
                 print(f"<< [result] {text}")
 
         # Mark message as printed
