@@ -227,7 +227,7 @@ class GeneralAgentCLI(BaseCLI):
         text_injections = []
         for file in processed_files:
             if file.file_type in ("text", "code") and file.text_content:
-                text_injections.append(f"\n\n[File: {file.filename}]\n{file.text_content}")
+                text_injections.append(f"\n\n[File: {file.workspace_path}]\n{file.text_content}")
 
         if text_injections:
             message_content[0]["text"] += "".join(text_injections)
