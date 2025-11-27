@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional
@@ -163,19 +165,38 @@ class WorkspaceManager:
 
             # Use symlink for fast, read-only access
             try:
-                if dst.exists():
-                    # Remove old symlink/directory
+                if dst.exists() or dst.is_symlink():
+                    # Remove old symlink/directory/junction
+                    # Note: is_junction() is Python 3.12+, use is_symlink() which also catches junctions
                     if dst.is_symlink():
                         dst.unlink()
-                    else:
+                    elif dst.is_dir():
                         shutil.rmtree(dst)
+                    else:
+                        dst.unlink()
 
                 dst.symlink_to(src, target_is_directory=True)
                 existing_skills.add(skill_id)
                 LOGGER.info(f"  ✓ Linked skill: {skill_id} -> {src}")
 
             except OSError as e:
-                # Symlink failed (maybe Windows without admin), fallback to copy
+                # Symlink failed (Windows without admin/dev mode)
+                # Try junction on Windows (no admin required for directories)
+                if sys.platform == "win32":
+                    try:
+                        # mklink /J creates a junction (no admin required)
+                        subprocess.run(
+                            ["cmd", "/c", "mklink", "/J", str(dst), str(src)],
+                            check=True,
+                            capture_output=True
+                        )
+                        existing_skills.add(skill_id)
+                        LOGGER.info(f"  ✓ Junction skill: {skill_id} -> {src}")
+                        continue
+                    except subprocess.CalledProcessError as je:
+                        LOGGER.warning(f"Junction also failed for {skill_id}: {je}")
+
+                # Fallback to copy
                 LOGGER.warning(f"Symlink failed for {skill_id}, copying instead: {e}")
                 shutil.copytree(src, dst, dirs_exist_ok=True)
                 existing_skills.add(skill_id)
