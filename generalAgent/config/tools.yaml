@@ -131,8 +131,8 @@ optional:
     description: "Call external agents"
 
   search_local_documents:
-    enabled: false
-    available_to_subagent: false
+    enabled: true
+    available_to_subagent: true
     category: "search"
     tags: ["search", "local", "documents", "windows"]
     description: "Search local Windows document database (360 FastFind FTS5 index)"
