@@ -60,8 +60,13 @@ def run_bash_command(
 
         # If running in a virtual environment, prepend venv bin to PATH
         if hasattr(sys, 'prefix') and sys.prefix != sys.base_prefix:
-            venv_bin = Path(sys.prefix) / "bin"
-            env["PATH"] = f"{venv_bin}:{env['PATH']}"
+            # Windows uses Scripts/, Unix uses bin/
+            if sys.platform == "win32":
+                venv_bin = Path(sys.prefix) / "Scripts"
+                env["PATH"] = f"{venv_bin};{env['PATH']}"
+            else:
+                venv_bin = Path(sys.prefix) / "bin"
+                env["PATH"] = f"{venv_bin}:{env['PATH']}"
             env["VIRTUAL_ENV"] = sys.prefix
 
         # Execute in workspace
@@ -80,6 +85,9 @@ def run_bash_command(
             output += f"\n[stderr]\n{result.stderr}"
 
         if result.returncode != 0:
+            # Windows exit code 9009 means program not found
+            if sys.platform == "win32" and result.returncode == 9009:
+                return f"Command failed: Program not found (exit code 9009)\nCheck if the command exists and is in PATH.\n{output}"
             return f"Command failed (exit code {result.returncode}):\n{output}"
 
         return output or "Command completed (no output)"
