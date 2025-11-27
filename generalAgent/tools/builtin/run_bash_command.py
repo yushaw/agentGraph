@@ -14,6 +14,28 @@ from langchain_core.tools import tool
 LOGGER = logging.getLogger(__name__)
 
 
+def _sanitize_output(output: str, workspace_path: Path) -> str:
+    """Remove absolute workspace path from output, replace with relative path."""
+    if not output:
+        return output
+
+    # Get the absolute path string (handle both forward and back slashes)
+    abs_path = str(workspace_path)
+
+    # Replace absolute path with "." (workspace root)
+    # Handle both Unix and Windows path separators
+    sanitized = output.replace(abs_path + os.sep, "")
+    sanitized = sanitized.replace(abs_path, ".")
+
+    # Also handle forward slashes on Windows
+    if os.sep == "\\":
+        abs_path_forward = abs_path.replace("\\", "/")
+        sanitized = sanitized.replace(abs_path_forward + "/", "")
+        sanitized = sanitized.replace(abs_path_forward, ".")
+
+    return sanitized
+
+
 @tool
 def run_bash_command(
     command: Annotated[str, "Bash command to execute (e.g., 'ls -la', 'cat file.txt')"],
@@ -83,6 +105,9 @@ def run_bash_command(
         output = result.stdout
         if result.stderr:
             output += f"\n[stderr]\n{result.stderr}"
+
+        # Sanitize output to hide absolute workspace path
+        output = _sanitize_output(output, workspace_path)
 
         if result.returncode != 0:
             # Windows exit code 9009 means program not found

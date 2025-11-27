@@ -64,6 +64,26 @@ core:
     tags: ["hitl", "interaction", "user"]
     description: "Ask user for input when additional information is needed"
 
+  screenshot:
+    category: "system"
+    tags: ["system", "screen", "capture", "visual", "windows"]
+    description: "Capture screenshot on Windows 10/11 (monitor, window by hwnd, or active window)"
+
+  list_monitors:
+    category: "system"
+    tags: ["system", "screen", "monitor", "windows"]
+    description: "List all available monitors on Windows (resolution, position, primary)"
+
+  list_windows:
+    category: "system"
+    tags: ["system", "screen", "window", "windows"]
+    description: "List all visible windows with hwnd for screenshot targeting"
+
+  get_active_window:
+    category: "system"
+    tags: ["system", "screen", "window", "windows"]
+    description: "Get information about the currently active/foreground window"
+
   run_bash_command:
     category: "execution"
     tags: ["execute", "bash", "shell"]

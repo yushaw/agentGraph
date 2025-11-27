@@ -400,10 +400,43 @@ run_bash_command("python skills/pdf/scripts/fill_fillable_fields.py uploads/form
 run_bash_command("python skills/pdf/scripts/extract_form_field_info.py uploads/form.pdf outputs/fields.json")
 ```
 
+**screenshot** (Windows 10/11) - Capture screen content
+```python
+screenshot()                        # Capture primary monitor
+screenshot(filename="error_state")  # Custom filename
+screenshot(monitor=1)               # Capture specific monitor (0-based index)
+screenshot(all_monitors=True)       # Capture all monitors combined
+screenshot(active_window=True)      # Capture currently active window
+screenshot(hwnd=12345)              # Capture specific window by handle
+```
+
+**list_monitors** (Windows 10/11) - List available monitors
+```python
+list_monitors()
+# -> Monitor 0 (Primary): 1920x1080 at (0, 0)
+#    Monitor 1: 2560x1440 at (1920, 0)
+```
+
+**list_windows** (Windows 10/11) - List windows with handles
+```python
+list_windows()
+# -> hwnd=12345 | 1200x800 | Chrome - Google
+#    hwnd=67890 | 800x600  | Notepad
+```
+
+**get_active_window** (Windows 10/11) - Get active window info
+```python
+get_active_window()
+# -> Active window: hwnd=12345, title=Chrome - Google, size=1200x800
+```
+
+**Screenshot tool requirements**: `pip install pywin32 pillow`
+
 **Tool selection guide:**
 - Use `find_files` when: Looking for files by name/pattern
 - Use `read_file` when: Want to see document content/preview
 - Use `search_file` when: Looking for specific keywords or information within a file
+- Use `screenshot` when: Need to capture user's current screen state
 - For large documents: Always prefer `search_file` over `read_file` for finding specific content
 
 ## Skill Configuration
