@@ -58,15 +58,15 @@ def run_bash_command(
             "AGENT_WORKSPACE_PATH": str(workspace_path),
         }
 
-        # If running in a virtual environment, prepend venv bin to PATH
+        # Add current Python's directory to PATH (works with venv, uv, conda, etc.)
+        python_dir = Path(sys.executable).parent
+        if sys.platform == "win32":
+            env["PATH"] = f"{python_dir};{env['PATH']}"
+        else:
+            env["PATH"] = f"{python_dir}:{env['PATH']}"
+
+        # Set VIRTUAL_ENV if in a virtual environment
         if hasattr(sys, 'prefix') and sys.prefix != sys.base_prefix:
-            # Windows uses Scripts/, Unix uses bin/
-            if sys.platform == "win32":
-                venv_bin = Path(sys.prefix) / "Scripts"
-                env["PATH"] = f"{venv_bin};{env['PATH']}"
-            else:
-                venv_bin = Path(sys.prefix) / "bin"
-                env["PATH"] = f"{venv_bin}:{env['PATH']}"
             env["VIRTUAL_ENV"] = sys.prefix
 
         # Execute in workspace
