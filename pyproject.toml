@@ -36,3 +36,7 @@ pdf-skills = [
     "pypdf>=6.1.3",       # PDF form filling (skill scripts)
     "pdf2image>=1.17.0",  # PDF to images (skill scripts)
 ]
+
+windows = [
+    "pywin32>=306; sys_platform == 'win32'",  # Windows screenshot tools
+]
